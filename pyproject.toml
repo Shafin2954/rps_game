@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rps-game-cli"
+dynamic = ["version"]
+description = "A fun Rock Paper Scissors game for the terminal"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Sohanur Rahman Sohan" }]
+dependencies = ["pyfiglet>=1.0", "rich>=13", "magic-wormhole>=0.24,<1"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Topic :: Games/Entertainment",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff", "hypothesis", "magic-wormhole-mailbox-server"]
+
+[project.scripts]
+rps = "rps_game.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rps_game*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "rps_game.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
