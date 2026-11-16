@@ -52,7 +52,7 @@ scoreboard updates and the hands are wiped for the next round. Stats are stored 
 `~/.local/share/rps-game-cli/stats.json` (platform equivalent elsewhere; override
 with `RPS_STATS_FILE`).
 
-### Dual Player (in progress)
+### Dual Player
 
 Two players on two devices, anywhere. Both of you need the game, an internet connection and a
 way to share a room code and passkey (a chat message is fine).
@@ -65,8 +65,15 @@ way to share a room code and passkey (a chat message is fine).
   game settings and can accept or decline.
 - Names are required and must differ from your opponent's after normalisation (case, spacing and
   full-width letters are ignored). If yours clashes you are asked for another.
-- **Status:** the connection and the hand-shake work. Playing rounds over the connection is the
-  next step, so for now both players land on a "Connected!" screen.
+- **Playing:** both players pick a move, and both see "Bob has locked in" as soon as the other
+  has chosen. Each round shows both hands on the sides you each chose, the verdict, and the
+  scoreboard (your connection's round-trip time is shown in the title). When the game ends you can
+  *Play again*, which needs both players to agree and reuses the connection, so there is no new
+  passkey to enter, or return to the menu.
+- **Leaving is a forfeit.** Quitting (you are asked to confirm), closing the program, losing your
+  connection for 30 seconds or taking more than two minutes to choose counts as a win for the other
+  player.
+- Statistics for online games (head-to-head) are coming soon; they are not recorded yet.
 
 **How it stays private and safe**
 
@@ -75,6 +82,11 @@ way to share a room code and passkey (a chat message is fine).
   so the mailbox (and anyone watching the network) cannot read the game or guess the passkey
   offline.
 - A wrong passkey fails on both sides. The host's room closes after three wrong attempts.
+- **Fair rounds.** Each round both players first send a hash of their move plus a random value
+  and only then reveal them, and each checks the other's reveal against the hash. A modified game
+  therefore cannot wait to see your move before choosing its own, and cannot change its mind
+  afterwards. A mismatch ends the game and you win. The two games also compare a running hash of
+  all earlier rounds, so they can never silently disagree about the score.
 - Everything received from the other side is validated strictly (size, types, names).
 - What the mailbox *can* see: your IP address, the room code and message timing, not names or
   moves. The default mailbox address is plain `ws://`, so a network observer sees those too.

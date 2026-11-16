@@ -114,3 +114,37 @@ def test_fuzzing_never_leaks_anything_but_protocol_errors():
 
     GOOD_TYPES = {type(m) for m in GOOD}
     run()
+
+
+# ---------------------------------------------------------------- phase 3 messages
+
+HEX64, HEX32 = "a" * 64, "b" * 32
+
+
+@pytest.mark.parametrize("message", [
+    p.Commit(1, HEX64, HEX64), p.Commit(10_000, HEX64, HEX64),
+    p.Reveal(1, "rock", HEX32), p.Reveal(7, "scissors", HEX32), p.Rematch(),
+])
+def test_game_messages_round_trip(message):
+    assert p.decode(p.encode(message)) == message
+
+
+@pytest.mark.parametrize("data", [
+    raw(t="commit", round=0, digest=HEX64, state=HEX64),             # rounds start at 1
+    raw(t="commit", round=10_001, digest=HEX64, state=HEX64),
+    raw(t="commit", round=True, digest=HEX64, state=HEX64),
+    raw(t="commit", round=1, digest="A" * 64, state=HEX64),          # uppercase hex
+    raw(t="commit", round=1, digest="a" * 63, state=HEX64),
+    raw(t="commit", round=1, digest=HEX64, state="z" * 64),
+    raw(t="commit", round=1, digest=5, state=HEX64),
+    raw(t="commit", round=1, digest=HEX64),                          # missing state
+    raw(t="reveal", round=1, move="lizard", nonce=HEX32),
+    raw(t="reveal", round=1, move="Rock", nonce=HEX32),              # exact spelling only
+    raw(t="reveal", round=1, move="rock", nonce="b" * 31),
+    raw(t="reveal", round=1, move="rock", nonce=5),
+    raw(t="reveal", round=-1, move="rock", nonce=HEX32),
+    raw(t="rematch", extra=1),
+])
+def test_bad_game_messages_are_rejected(data):
+    with pytest.raises(ProtocolError):
+        p.decode(data)

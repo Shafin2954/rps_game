@@ -26,6 +26,10 @@ MAX_COUNT = 99
 _APP = re.compile(r"[0-9A-Za-z.+\-]{1,32}")
 NAME_REJECT_REASONS = ("taken", "invalid")
 BYE_REASONS = ("quit", "declined", "cancelled", "incompatible")
+MOVE_NAMES = ("rock", "paper", "scissors")
+MAX_ROUND = 10_000
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_HEX32 = re.compile(r"[0-9a-f]{32}")
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,25 @@ class Bye:
 
 
 @dataclass(frozen=True)
+class Commit:
+    round: int
+    digest: str            # SHA-256 over (round, role, move, nonce); see fairness.py
+    state: str             # hash of every finished round so far: both sides must agree
+
+
+@dataclass(frozen=True)
+class Reveal:
+    round: int
+    move: str
+    nonce: str
+
+
+@dataclass(frozen=True)
+class Rematch:
+    pass
+
+
+@dataclass(frozen=True)
 class Ping:
     n: int
 
@@ -77,7 +100,8 @@ class Pong:
     n: int
 
 
-Message = Union[Hello, RejectName, Settings, Accept, Decline, Start, Bye, Ping, Pong]
+Message = Union[Hello, RejectName, Settings, Accept, Decline, Start, Bye, Ping, Pong,
+                Commit, Reveal, Rematch]
 
 
 # ---------------------------------------------------------------- encoding
@@ -98,6 +122,14 @@ def encode(message: Message) -> bytes:
         body = {"t": "start"}
     elif isinstance(message, Bye):
         body = {"t": "bye", "reason": message.reason}
+    elif isinstance(message, Commit):
+        body = {"t": "commit", "round": message.round, "digest": message.digest,
+                "state": message.state}
+    elif isinstance(message, Reveal):
+        body = {"t": "reveal", "round": message.round, "move": message.move,
+                "nonce": message.nonce}
+    elif isinstance(message, Rematch):
+        body = {"t": "rematch"}
     elif isinstance(message, Ping):
         body = {"t": "ping", "n": message.n}
     elif isinstance(message, Pong):
@@ -178,9 +210,22 @@ def decode(data: object) -> Message:
         if (rounds is None) == (first_to is None):     # exactly one must be set
             raise ProtocolError("bad settings")
         return Settings(rounds, first_to)
-    if kind in ("accept", "decline", "start"):
+    if kind in ("accept", "decline", "start", "rematch"):
         _fields(obj)
-        return {"accept": Accept, "decline": Decline, "start": Start}[kind]()
+        return {"accept": Accept, "decline": Decline, "start": Start, "rematch": Rematch}[kind]()
+    if kind == "commit":
+        _fields(obj, "round", "digest", "state")
+        for field in ("digest", "state"):
+            if not isinstance(obj[field], str) or _HEX64.fullmatch(obj[field]) is None:
+                raise ProtocolError(f"bad {field}")
+        return Commit(_int(obj["round"], 1, MAX_ROUND, "round"), obj["digest"], obj["state"])
+    if kind == "reveal":
+        _fields(obj, "round", "move", "nonce")
+        if obj["move"] not in MOVE_NAMES:
+            raise ProtocolError("bad move")
+        if not isinstance(obj["nonce"], str) or _HEX32.fullmatch(obj["nonce"]) is None:
+            raise ProtocolError("bad nonce")
+        return Reveal(_int(obj["round"], 1, MAX_ROUND, "round"), obj["move"], obj["nonce"])
     if kind == "bye":
         _fields(obj, "reason")
         if obj["reason"] not in BYE_REASONS:

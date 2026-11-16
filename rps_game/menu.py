@@ -46,6 +46,7 @@ class GameConfig:
     best_of: Optional[int] = None      # first-to-majority match (CLI only)
     first_to: Optional[int] = None     # first to N wins (CLI; dual play later)
     rounds: Optional[int] = None       # fixed number of rounds; None = unlimited
+    one_game: bool = False             # online play: one game, then the results screen
 
 
 def stats_menu(ui: GameUI) -> None:

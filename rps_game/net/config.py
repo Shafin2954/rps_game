@@ -23,6 +23,12 @@ STEP_TIMEOUT = 60               # any single handshake reply
 HUMAN_TIMEOUT = 180             # replies that wait on a person (new name, accept/decline)
 POLL_SLICE = 0.2                # how often waits check for Esc / redraw
 
+COMMIT_TIMEOUT = 120            # how long we wait for the other player to lock in a move
+REVEAL_TIMEOUT = 20             # once both have locked in, the reveal is just network time
+REMATCH_TIMEOUT = 120           # how long we wait for an answer to "play again?"
+PING_INTERVAL = 5.0             # heartbeat; also measures round-trip time
+LIVENESS_TIMEOUT = 30.0         # silence this long and the other player is considered gone
+
 
 def mailbox_url(cli_value: str | None = None) -> str:
     """--mailbox beats $RPS_MAILBOX beats the public default."""

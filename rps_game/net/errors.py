@@ -86,3 +86,20 @@ class PeerLeft(NetError):
 
     def __init__(self, who: str = "The other player") -> None:
         super().__init__(f"{who} left the game.")
+
+
+class ConnectionLost(NetError):
+    """Nothing has been heard from the other player for too long."""
+
+    def __init__(self, who: str = "the other player") -> None:
+        super().__init__(f"Lost contact with {who}.")
+
+
+class CheatDetected(NetError):
+    """A revealed move didn't match what the player had locked in."""
+
+    def __init__(self, who: str = "The other player") -> None:
+        super().__init__(
+            f"{who}'s game sent a move that doesn't match what they locked in, "
+            "so the game was ended."
+        )

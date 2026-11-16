@@ -271,6 +271,7 @@ class GameUI:
         self._board = _Board(Score(), None, None, 0, None)
         self._logo_text: Optional[str] = None
         self._board_text: Optional[str] = None
+        self._wait_text = ""
         self.you = Seat("You", Side.LEFT)
         self.opponent = Seat("Computer", Side.RIGHT)
 
@@ -330,18 +331,28 @@ class GameUI:
         crumbs: str = "",
         back_label: str = "back",
         start: int = 0,
+        header: Sequence[RenderableType] = (),
+        plain_header: Sequence[str] = (),
+        idle: Optional[Callable[[], str]] = None,
     ) -> Optional[str]:
         """Show a menu. Returns the chosen option's value, or None for back/exit.
-        ``start`` is the index the cursor begins on (rich mode)."""
-        if not self._interactive():
-            return self._choose_plain(title, options, crumbs, back_label)
-        return self._choose_rich(title, options, crumbs, back_label, start)
 
-    def _choose_plain(self, title, options, crumbs, back_label) -> Optional[str]:
+        ``start`` is the index the cursor begins on (rich mode). ``header`` (rich) and
+        ``plain_header`` (plain) are shown above the options, e.g. a results table.
+        ``idle`` is polled while waiting for a key and returns a status line to show
+        (rich mode only), e.g. "Bob wants to play again."
+        """
+        if not self._interactive():
+            return self._choose_plain(title, options, crumbs, back_label, plain_header)
+        return self._choose_rich(title, options, crumbs, back_label, start, header, idle)
+
+    def _choose_plain(self, title, options, crumbs, back_label, plain_header=()) -> Optional[str]:
         self._say()
         if crumbs:
             self._say(crumbs, "dim")
         self._say(title, "bold")
+        for line in plain_header:
+            self._say(line)
         for i, o in enumerate(options, 1):
             tag = f" ({o.tag})" if o.tag else ""
             desc = f" - {o.description}" if o.description else ""
@@ -358,11 +369,14 @@ class GameUI:
             else:
                 self._say(f"Please type a number from 1 to {len(options)}.")
 
-    def _menu_screen(self, title, options, index, crumbs, notice, hint) -> Group:
-        parts: list[RenderableType] = self._logo()
-        if crumbs:
-            parts.append(_line(crumbs, "dim"))
-        parts += [_line(title, "bold"), _line()]
+    def _menu_screen(self, title, options, index, crumbs, notice, hint, header=()) -> Group:
+        if header:                          # a results-style screen: no logo, save the rows
+            parts: list[RenderableType] = [_line(title, "bold"), _line(), *header, _line()]
+        else:
+            parts = self._logo()
+            if crumbs:
+                parts.append(_line(crumbs, "dim"))
+            parts += [_line(title, "bold"), _line()]
         rows = []
         for i, o in enumerate(options):
             selected = i == index
@@ -382,7 +396,8 @@ class GameUI:
         ]
         return self._vcenter(parts)
 
-    def _choose_rich(self, title, options, crumbs, back_label, start=0) -> Optional[str]:
+    def _choose_rich(self, title, options, crumbs, back_label, start=0, header=(),
+                     idle=None) -> Optional[str]:
         updown = "Up/Down" if self.ascii_only else "\u2191/\u2193"
         hint = f"{updown} move   Enter select   Esc {back_label}"
         index, notice = max(0, min(start, len(options) - 1)), ""
@@ -392,10 +407,15 @@ class GameUI:
         live.start()
         try:
             while True:
+                status = idle() if idle is not None else ""
                 live.update(
-                    self._menu_screen(title, options, index, crumbs, notice, hint), refresh=True
+                    self._menu_screen(title, options, index, crumbs, notice or status, hint,
+                                      header),
+                    refresh=True,
                 )
-                key = terminal.read_key()
+                key = terminal.read_key(timeout=0.3) if idle is not None else terminal.read_key()
+                if key is None:                     # nothing pressed: just refresh the status
+                    continue
                 notice = ""
                 select = key in (terminal.KEY_ENTER, terminal.KEY_RIGHT, " ")
                 if key in (terminal.KEY_UP, "k"):
@@ -600,7 +620,8 @@ class GameUI:
             return
         self._say()
         self._say("ROCK PAPER SCISSORS", "bold")
-        self._say(f"Mode: {mode_text(best_of, rounds, first_to)}   Computer: {difficulty}")
+        who = f"{self.opponent.name}: {difficulty}" if difficulty else f"Opponent: {self.opponent.name}"
+        self._say(f"Mode: {mode_text(best_of, rounds, first_to)}   {who}")
         self._say("Type r, p or s (or 1, 2, 3). Type q to quit.", "dim")
 
     # -- round lifecycle --------------------------------------------------
@@ -615,10 +636,12 @@ class GameUI:
             max_rounds=match.max_rounds,
         )
 
-    def start_round(self, match: Match, session: Score, difficulty: str) -> None:
+    def start_round(self, match: Match, session: Score, difficulty: str, *,
+                    note: str = "") -> None:
         """Begin a round: in rich mode, wipe the screen and draw it fresh."""
         number = len(match.rounds) + 1
         of = f" of {match.max_rounds}" if match.max_rounds else ""
+        self._wait_text = ""                           # a new round may need the same waiting text again
         if self.plain:
             self._say()
             self._say(f"Round {number}{of}", "bold")
@@ -629,6 +652,7 @@ class GameUI:
                 "ROCK PAPER SCISSORS",
                 f"{self.opponent.name}: {difficulty}" if difficulty else f"vs {self.opponent.name}",
                 f"Round {number}{of}",
+                *([note] if note else []),
             ]),
             caption=_line("Your move!", "dim"),
             prompt=self._choices_prompt(),
@@ -639,6 +663,25 @@ class GameUI:
         self._live.start()
         self._draw()
 
+    def opponent_wait(self, text: str, leave_prompt: str = "") -> bool:
+        """Called repeatedly while waiting on the other player.
+        Returns False if the player chose to leave (after confirming)."""
+        if self._live is None:                       # plain mode: say each new thing once
+            if text != self._wait_text:
+                self._wait_text = text
+                self._say(text, "dim")
+            return True
+        if text != self._wait_text:
+            self._wait_text = text
+            self._draw(prompt=_line(text, "bold"),
+                       notice=_line("Press q to leave (you forfeit the game)", "dim"))
+        key = terminal.read_key(timeout=0) if self._interactive() else None
+        if key and (key.lower() == "q" or key == terminal.KEY_ESC):
+            if not leave_prompt or self._confirm_leave(leave_prompt):
+                return False
+            self._wait_text = ""                     # screen was rebuilt: draw the text again
+        return True
+
     def end_round(self) -> None:
         if self._live is not None:
             self._live.stop()
@@ -646,16 +689,23 @@ class GameUI:
 
     # -- move input ------------------------------------------------------
 
-    def ask_move(self) -> Optional[Move]:
-        """Return the chosen Move, or None if the player wants to quit."""
-        if not self._interactive():
-            return self._ask_line()
-        return self._ask_key()
+    def ask_move(self, idle: Optional[Callable[[], str]] = None,
+                 leave_prompt: str = "") -> Optional[Move]:
+        """Return the chosen Move, or None if the player wants to quit.
 
-    def _ask_line(self) -> Optional[Move]:
+        Online play passes ``idle`` (polled while waiting; returns a status line such
+        as "Bob has locked in", and may raise if the opponent is gone) and a
+        ``leave_prompt`` (asked before quitting, since leaving forfeits the game)."""
+        if not self._interactive():
+            return self._ask_line(leave_prompt)
+        return self._ask_key(idle, leave_prompt)
+
+    def _ask_line(self, leave_prompt: str = "") -> Optional[Move]:
         while True:
             raw = input("Your move (rock, paper, scissors, or quit): ")
             if raw.strip().lower() in QUIT_WORDS:
+                if leave_prompt and not self.confirm(leave_prompt):
+                    continue
                 return None
             move = Move.parse(raw)
             if move:
@@ -676,11 +726,36 @@ class GameUI:
             justify="center",
         )
 
-    def _ask_key(self) -> Optional[Move]:
+    def _confirm_leave(self, question: str) -> bool:
+        """Ask "really leave?" over the round screen, and put the screen back if not."""
+        was_live = self._live is not None
+        self.end_round()
+        leaving = self.confirm(question)
+        if not leaving and was_live:
+            self._clear()
+            self._live = Live(console=self.console, auto_refresh=False)
+            self._live.start()
+            self._draw()
+        return leaving
+
+    def _ask_key(self, idle=None, leave_prompt: str = "") -> Optional[Move]:
         terminal.flush_input()
+        last = None
         while True:
-            key = terminal.read_key()
+            if idle is not None:
+                status = idle()
+                if status != last:
+                    last = status
+                    self._draw(notice=_line(status, "dim"))
+                key = terminal.read_key(timeout=0.25)
+                if key is None:
+                    continue
+            else:
+                key = terminal.read_key()
             if key.lower() == "q":
+                if leave_prompt and not self._confirm_leave(leave_prompt):
+                    last = None
+                    continue
                 return None
             move = Move.parse(key)
             if move:
@@ -892,6 +967,43 @@ class GameUI:
         return (f"{label}: Wins {s.wins}, Losses {s.losses}, Draws {s.draws}, "
                 f"Rounds {s.rounds}, Win rate {s.win_rate:.0%}, Best streak {s.best_streak}")
 
+    def _results_header(self, session, matches, lifetime, finished):
+        """(rich parts, plain lines) describing a finished game; no title."""
+        match_line = None
+        if matches is not None and matches.rounds:
+            match_line = f"Matches won: {matches.wins}   Matches lost: {matches.losses}"
+        summary = (_match_summary(finished, self.opponent.name)
+                   if finished is not None and finished.is_over else None)
+        rich: list[RenderableType] = []
+        plain: list[str] = []
+        if summary:
+            rich += [_line(summary[0], summary[1]), _line()]
+            plain.append(summary[0])
+        if session.rounds:
+            rows: list[tuple[str, Score | Stats]] = [("This session", session)]
+            plain.append(self._stats_line("This session", session))
+            if lifetime is not None and lifetime.rounds:
+                rows.append(("All time", lifetime))
+            rich += self._scoreboard_heading(22)
+            rich.append(Align.center(self._stats_table(rows)))
+            if match_line:
+                rich += [_line(), _line(match_line)]
+                plain.append(match_line)
+            if lifetime is not None and lifetime.rounds:
+                plain.append(self._stats_line("All time", lifetime))
+        else:
+            rich.append(_line("No rounds played this time.", "dim"))
+        return rich, plain
+
+    def results_menu(self, title: str, session: Score, finished: Optional[Match],
+                     options: Sequence[Option], *, idle: Optional[Callable[[], str]] = None,
+                     back_label: str = "leave") -> Optional[str]:
+        """Game over: the result and scoreboard with a menu underneath."""
+        self.end_round()
+        rich, plain = self._results_header(session, None, None, finished)
+        return self.choose(title, options, back_label=back_label, header=rich,
+                           plain_header=plain, idle=idle)
+
     def goodbye(
         self,
         session: Score,
@@ -905,39 +1017,14 @@ class GameUI:
         """Results screen: a centred scoreboard. With ``pause`` it waits for a
         key (used when returning to the menu); otherwise it stays on screen."""
         self.end_round()
-        match_line = None
-        if matches is not None and matches.rounds:
-            match_line = f"Matches won: {matches.wins}   Matches lost: {matches.losses}"
-        summary = (_match_summary(finished, self.opponent.name)
-                   if finished is not None and finished.is_over else None)
-
+        rich, plain = self._results_header(session, matches, lifetime, finished)
         if self.plain:
             self._say()
             self._say(title, "bold")
-            if summary:
-                self._say(summary[0])
-            if session.rounds:
-                self._say(self._stats_line("This session", session))
-                if match_line:
-                    self._say(match_line)
-            if lifetime is not None and lifetime.rounds:
-                self._say(self._stats_line("All time", lifetime))
+            for line in plain:
+                self._say(line)
             return
-
-        parts: list[RenderableType] = [_line(title, "bold"), _line()]
-        if summary:
-            parts += [_line(summary[0], summary[1]), _line()]
-        if session.rounds:
-            rows: list[tuple[str, Score | Stats]] = [("This session", session)]
-            if lifetime is not None and lifetime.rounds:
-                rows.append(("All time", lifetime))
-            parts += self._scoreboard_heading(22)
-            parts.append(Align.center(self._stats_table(rows)))
-            if match_line:
-                parts += [_line(), _line(match_line)]
-        else:
-            parts.append(_line("No rounds played this time.", "dim"))
-        parts.append(_line())
+        parts: list[RenderableType] = [_line(title, "bold"), _line(), *rich, _line()]
         if pause:
             parts.append(_line("Press any key to return to the menu", "bold"))
         self._clear()

@@ -14,7 +14,9 @@ from .engine import Match, Move, Score
 from . import settings as settings_store
 from .dualsetup import DualSetup
 from .net.config import mailbox_url
-from .net.connect import connect_dual, terms_text
+from .net.connect import connect_dual
+from .net.errors import Cancelled, NetError
+from .net.play import LEAVE_PROMPT, play_dual
 from .menu import MAX_ROUNDS, GameConfig, select_game
 from .players import CpuOpponent, Opponent
 from .stats import Stats
@@ -178,7 +180,9 @@ class GameResult:
     lifetime: Optional[Stats]
     finished: Optional[Match]     # the completed fixed-length game, if it got that far
     interrupted: bool             # Ctrl-C / closed input: the player wants out entirely
-    opponent_left: bool = False   # the opponent quit or disconnected mid-game
+    opponent_left: bool = False   # the opponent quit, disconnected or cheated mid-game
+    quit_by_player: bool = False  # the local player chose to leave
+    end_reason: str = ""          # why an online game ended early, in words
 
 
 def _new_match(config: GameConfig) -> Match:
@@ -198,16 +202,29 @@ def run_game(ui: GameUI, config: GameConfig, *, save: bool = True,
     history: list[Move] = []          # everything the player has thrown
     match = _new_match(config)
     finished: Optional[Match] = None
-    interrupted = opponent_left = False
+    interrupted = opponent_left = quit_by_player = False
+    end_reason = ""
+    online = hasattr(opponent, "poll_status")      # a network opponent can report on itself
+    if online:
+        opponent.on_wait = lambda text: ui.opponent_wait(text, LEAVE_PROMPT)
 
     ui.intro(best_of=config.best_of, rounds=config.rounds, difficulty=config.difficulty,
              first_to=config.first_to)
     try:
         while True:
-            ui.start_round(match, session, config.difficulty)
+            if online:
+                rtt = getattr(opponent, "rtt_ms", None)
+                ui.start_round(match, session, config.difficulty,
+                               note=f"{rtt:.0f} ms" if rtt is not None else "")
+            else:
+                ui.start_round(match, session, config.difficulty)
             try:
-                move = ui.ask_move()
+                if online:
+                    move = ui.ask_move(idle=opponent.poll_status, leave_prompt=LEAVE_PROMPT)
+                else:
+                    move = ui.ask_move()
                 if move is None:
+                    quit_by_player = True
                     break
                 theirs = opponent.play(move)          # a computer sees only *past* moves
                 if theirs is None:
@@ -219,12 +236,18 @@ def run_game(ui: GameUI, config: GameConfig, *, save: bool = True,
                 opponent.record(rnd)
                 session.record(rnd.outcome)
                 ui.show_round(rnd, match, session)
+            except Cancelled:                              # left while waiting on the opponent
+                quit_by_player = True
+                break
+            except NetError as exc:                        # they left, vanished or cheated
+                opponent_left, end_reason = True, str(exc)
+                break
             finally:
                 ui.end_round()
 
             if match.is_over:
                 matches.record(match.winner)
-                if config.rounds:                      # a fixed-length game is done
+                if config.rounds or config.one_game:       # a single game is done
                     finished = match
                     break
                 match = _new_match(config)             # race-style match: start the next one
@@ -237,7 +260,8 @@ def run_game(ui: GameUI, config: GameConfig, *, save: bool = True,
         lifetime.merge(session, matches, history)
         if session.rounds:
             stats_store.save(lifetime)
-    return GameResult(session, matches, lifetime, finished, interrupted, opponent_left)
+    return GameResult(session, matches, lifetime, finished, interrupted, opponent_left,
+                      quit_by_player, end_reason)
 
 
 def _shown_lifetime(result: GameResult):
@@ -270,14 +294,10 @@ def run_menu(args: argparse.Namespace) -> int:
                     break
                 if isinstance(config, DualSetup):
                     connection = connect_dual(ui, config, mailbox=mailbox_url(args.mailbox))
-                    if connection is not None:
-                        # Playing over the connection arrives in the next phase.
-                        ui.message("Connected!", [
-                            f"You are connected to {connection.opponent_name}.",
-                            f"Game: {terms_text(connection.terms)}", "",
-                            "Playing the game itself arrives in the next update.",
-                        ], crumbs="Dual Player")
-                        connection.close()
+                    if connection is not None and play_dual(
+                            ui, config, connection, run_game=run_game):
+                        ui.farewell()                      # Ctrl-C mid-game: quit, like single player
+                        return 0
                     continue
                 result = run_game(ui, config, save=not args.no_save)
                 if result.interrupted:
