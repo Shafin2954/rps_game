@@ -107,6 +107,7 @@ class Connection:
     opponent_name: str
     opponent_id: str
     terms: GameTerms
+    opponent_app: str = ""         # the other game's version: decides what it understands
 
     def close(self, reason: str = "quit") -> None:
         try:
@@ -214,7 +215,7 @@ class HostSession:
         chan.send(proto.Start())
         self._status("starting", name=joiner.name)
         return Connection(transport, chan, "host", self._name, joiner.name, joiner.install_id,
-                          self._terms)
+                          self._terms, joiner.app)
 
     @staticmethod
     def _goodbye(chan: Channel, reason: str) -> None:
@@ -305,4 +306,5 @@ class JoinSession:
         start = chan.recv(self._step_timeout, f"{host.name} to start the game")
         if not isinstance(start, proto.Start):
             raise ProtocolError("expected start")
-        return Connection(transport, chan, "join", name, host.name, host.install_id, terms)
+        return Connection(transport, chan, "join", name, host.name, host.install_id, terms,
+                          host.app)

@@ -29,7 +29,8 @@ _ALL = (
     Relic("gambit", "Opening Gambit", "Your first win in every fight deals double damage."),
     Relic("executioner", "Executioner", "+2 damage against a foe at half health or less."),
     Relic("counterpunch", "Counterpunch", "After losing a round, your next win deals +2 damage."),
-    Relic("gloves", "Heavy Gloves", "All wins deal +1 damage, but you start fights with 1 less Focus."),
+    Relic("gloves", "Heavy Gloves",
+          "All wins deal +1 damage, but you start fights with 1 less Focus."),
     Relic("glass", "Glass Cannon", "Your wins deal +2 damage. Every hit on you deals +1."),
     # -- defence
     Relic("skin", "Thick Skin", "Every hit on you deals 1 less damage (at least 1)."),

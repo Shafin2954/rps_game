@@ -112,7 +112,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--ascii", action="store_true", help="use only ASCII characters for tables"
     )
     parser.add_argument(
-        "--no-animation", action="store_true", help="skip the countdown animation"
+        "--no-animation", action="store_true",
+        help="skip the countdown, clash effects, opening splash and fireworks",
     )
     parser.add_argument(
         "--mailbox", metavar="URL",
@@ -275,7 +276,12 @@ def run_game(ui: GameUI, config: GameConfig, *, save: bool = True,
                 played.append(rnd)
                 opponent.record(rnd)
                 session.record(rnd.outcome)
-                ui.show_round(rnd, match, session)
+                quip = getattr(opponent, "quip", None)
+                said = quip(rnd) if quip is not None else None
+                if said:                                   # an opponent with something to say
+                    ui.show_round(rnd, match, session, said=said)
+                else:
+                    ui.show_round(rnd, match, session)
             except Cancelled:                              # left while waiting on the opponent
                 quit_by_player = True
                 break
@@ -347,6 +353,7 @@ def run_menu(args: argparse.Namespace) -> int:
     ui = _make_ui(args)
     try:
         with _keys(ui):
+            ui.splash()
             while True:
                 config = select_game(ui)
                 if config is None:

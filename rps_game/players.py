@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Protocol, Sequence
 
-from .engine import Move, Round
+from .engine import Move, Outcome, Round
 from .strategies import Strategy
 
 
@@ -67,6 +67,15 @@ class CpuOpponent:
 
     def record(self, rnd: Round) -> None:
         self._history.append(rnd.player)
+
+    def quip(self, rnd: Round) -> Optional[str]:
+        """Something the computer has to say about the round just played, if its
+        strategy talks (the Oracle explains how it read you). Call once per round."""
+        explain = getattr(self._strategy, "explain", None)
+        if explain is None:
+            return None
+        text = explain(rnd.player, rnd.outcome is Outcome.LOSS)
+        return f'{getattr(self._strategy, "voice", self.name)}: "{text}"' if text else None
 
     @property
     def history(self) -> Sequence[Move]:

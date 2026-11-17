@@ -72,6 +72,7 @@ class Oracle:
         }
         self._advice: dict[tuple[str, int], int] = {}
         self._fresh = False                            # is _advice for the upcoming round?
+        self.last_read: Optional[tuple[str, int]] = None   # (predictor, depth) behind the advice
 
     # ------------------------------------------------------------- learning
 
@@ -128,9 +129,14 @@ class Oracle:
             score = self._scores[key]
             if score > best:
                 best_key, best = key, score
+        self.last_read = best_key
         if best_key is None:
             return None, 0.0
         return _MOVE[self._advice[best_key]], best
+
+    def last_result(self) -> Optional[int]:
+        """How the latest round went for them: 1 won, -1 lost, 0 drew, None unknown."""
+        return self._result(len(self._theirs) - 1) if self._theirs else None
 
     # ------------------------------------------------------------- the panel
 
@@ -212,12 +218,37 @@ class Oracle:
         return None
 
 
+# What the Oracle says after winning on a confident read, by which model saw it coming.
+# ``{move}`` is what the player threw; ``{after}`` is "a win", "a loss" or "a draw".
+_SAYINGS = {
+    "recent": "You have been leaning on {move}. I leaned back.",
+    "favourite": "{Move} is your favourite. It shows.",
+    "habit": "After throws like your last ones, you always reach for {move}.",
+    "answer": "That is how you answer my last throw. Every time.",
+    "moment": "We have stood exactly here before. You threw {move} then, too.",
+    "reaction": "After {after} you always make the same step. I was already there.",
+    "echo": "This whole stretch has happened before. So had your {move}.",
+}
+_SECOND_GUESS = {
+    1: "You tried to step one ahead of me. I was waiting there.",
+    2: "A double bluff. I had counted on it.",
+}
+_AFTER = {1: "a win", -1: "a loss", 0: "a draw"}
+# An expert's score after about seven right answers running. Against a random
+# player some expert is always on a short lucky streak; this is the level a
+# real habit reaches and luck rarely does.
+SURE = 5.0
+
+
 class OracleStrategy:
     """The Oracle as a computer opponent.
 
     ``noise`` is the chance of ignoring the council and throwing at random,
     which keeps a lesser version beatable by something other than chaos.
+    After a round, ``explain`` may say how it saw the player's throw coming.
     """
+
+    voice = "The Oracle"
 
     def __init__(self, *, noise: float = 0.0, rng: random.Random | None = None,
                  oracle: Oracle | None = None) -> None:
@@ -227,6 +258,9 @@ class OracleStrategy:
         self._seen = 0                                 # opponent throws already learned from
         self._pending: Optional[Move] = None           # our throw for the round in flight
         self.confidence = 0.0
+        self._read: Optional[tuple[str, int]] = None   # the model behind the throw in flight
+        self._after: Optional[int] = None              # how the round before it went for them
+        self._quiet = 3                                # rounds since it last spoke
 
     def choose(self, opponent_history: Sequence[Move]) -> Move:
         new = list(opponent_history)[self._seen:]
@@ -237,10 +271,30 @@ class OracleStrategy:
         self._seen = len(opponent_history)
 
         throw, self.confidence = self._oracle.advise()
+        self._read, self._after = self._oracle.last_read, self._oracle.last_result()
         if throw is None or self._rng.random() < self._noise:
-            throw = self._rng.choice(MOVES)
+            throw, self._read = self._rng.choice(MOVES), None
         self._pending = throw
         return throw
+
+    def explain(self, theirs: Move, won: bool) -> Optional[str]:
+        """After a round: if the Oracle won it on a read it was sure of, how it knew.
+
+        It speaks at most every third round, and only when the model behind the
+        throw had been right many times running, so it rarely brags about luck."""
+        read, self._read = self._read, None
+        self._quiet += 1
+        if not won or read is None or self.confidence < SURE or self._quiet < 3:
+            return None
+        self._quiet = 0
+        name, depth = read
+        if depth:
+            return _SECOND_GUESS[depth]
+        family = name.split("-")[0]
+        if family == "reaction" and self._after is None:
+            family = "habit"
+        return _SAYINGS[family].format(move=theirs.value, Move=theirs.value.capitalize(),
+                                       after=_AFTER.get(self._after, ""))
 
 
 def predictability(pairs: Sequence[tuple[Move, Optional[Move]]]) -> float:

@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 from collections import Counter
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Optional, Sequence
 
 from ..engine import MOVES, Move, Outcome
 from ..oracle import Oracle, OracleStrategy
@@ -165,6 +165,10 @@ class Seer:
             self._strategy = OracleStrategy(rng=self._rng, oracle=oracle)
         return self._strategy.choose(sight.theirs)
 
+    def explain(self, theirs: Move, won: bool) -> Optional[str]:
+        """How it read the hero's last throw, when it did (see OracleStrategy.explain)."""
+        return None if self._strategy is None else self._strategy.explain(theirs, won)
+
 
 # ---------------------------------------------------------------- the roster
 
@@ -228,7 +232,8 @@ ROSTER = (
             4, 12, 3, lambda rng: Student(PatternStrategy(randomness=0.1, rng=rng)), ("study",)),
     FoeSpec("sage", "Sage", "the Statistician", "Keeps a tally of your last dozen throws.",
             4, 12, 3,
-            lambda rng: Student(AdaptiveStrategy(randomness=0.2, window=12, min_history=1, rng=rng)),
+            lambda rng: Student(AdaptiveStrategy(randomness=0.2, window=12, min_history=1,
+                                                 rng=rng)),
             ("armor", "study")),
     FoeSpec("wraith", "Wraith", "the Unseen", "Throws without thought or pattern. Bring a plan.",
             4, 10, 3, lambda rng: Chaos(rng), ("thorns",)),

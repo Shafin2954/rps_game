@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Union
 
+from .. import chat
 from ..identity import valid_install_id
 from ..names import check_name
 from .config import MAX_MESSAGE_BYTES
@@ -91,6 +92,11 @@ class Rematch:
 
 
 @dataclass(frozen=True)
+class Chat:
+    text: str              # one tidy line; see chat.py for what is allowed
+
+
+@dataclass(frozen=True)
 class Ping:
     n: int
 
@@ -101,7 +107,7 @@ class Pong:
 
 
 Message = Union[Hello, RejectName, Settings, Accept, Decline, Start, Bye, Ping, Pong,
-                Commit, Reveal, Rematch]
+                Commit, Reveal, Rematch, Chat]
 
 
 # ---------------------------------------------------------------- encoding
@@ -130,6 +136,8 @@ def encode(message: Message) -> bytes:
                 "nonce": message.nonce}
     elif isinstance(message, Rematch):
         body = {"t": "rematch"}
+    elif isinstance(message, Chat):
+        body = {"t": "chat", "text": message.text}
     elif isinstance(message, Ping):
         body = {"t": "ping", "n": message.n}
     elif isinstance(message, Pong):
@@ -231,6 +239,11 @@ def decode(data: object) -> Message:
         if obj["reason"] not in BYE_REASONS:
             raise ProtocolError("bad reason")
         return Bye(obj["reason"])
+    if kind == "chat":
+        _fields(obj, "text")
+        if not chat.valid(obj["text"]):                # must already be in tidy form
+            raise ProtocolError("bad chat message")
+        return Chat(obj["text"])
     if kind in ("ping", "pong"):
         _fields(obj, "n")
         n = _int(obj["n"], 0, 2**31 - 1, "counter")

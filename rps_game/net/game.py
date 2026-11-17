@@ -27,11 +27,12 @@ import threading
 import time
 from typing import Callable, Optional
 
+from .. import chat
 from ..engine import Move, Round
 from . import fairness
 from . import protocol as proto
-from .config import (COMMIT_TIMEOUT, LIVENESS_TIMEOUT, PING_INTERVAL, REMATCH_TIMEOUT,
-                     REVEAL_TIMEOUT)
+from .config import (CHAT_BURST, CHAT_WINDOW, COMMIT_TIMEOUT, LIVENESS_TIMEOUT, PING_INTERVAL,
+                     REMATCH_TIMEOUT, REVEAL_TIMEOUT)
 from .errors import (Cancelled, CheatDetected, ConnectionLost, NetError, PeerLeft, ProtocolError,
                      Timeout, TransportError)
 from .session import Connection
@@ -58,6 +59,10 @@ class NetworkOpponent:
         self.opponent_id = connection.opponent_id
         self.on_wait: Optional[WaitHook] = None
         self.rtt_ms: Optional[float] = None
+        self.chat = chat.ChatLog(self.name)
+        # A game from before chat existed would take a message for cheating.
+        self.can_chat = chat.supports_chat(connection.opponent_app)
+        self._chat_times: list[float] = []                 # when their recent messages arrived
 
         self._conn = connection
         self._transport = connection.transport
@@ -148,6 +153,8 @@ class NetworkOpponent:
             elif isinstance(message, proto.Rematch):
                 self._rematch_recv = True
                 self._maybe_restart()
+            elif isinstance(message, proto.Chat):
+                self._on_chat(message)
             else:
                 raise ProtocolError("unexpected message during the game")
             self._cv.notify_all()
@@ -178,6 +185,14 @@ class NetworkOpponent:
         if not hmac.compare_digest(expected, self._their_commit[r][0]):
             raise CheatDetected(self.name)
         self._their_reveal[r] = move
+
+    def _on_chat(self, msg: proto.Chat) -> None:
+        """Chat never touches the game. A flood is dropped, not punished."""
+        now = self._clock()
+        self._chat_times = [t for t in self._chat_times if now - t < CHAT_WINDOW]
+        if len(self._chat_times) < CHAT_BURST:
+            self._chat_times.append(now)
+            self.chat.add(msg.text, mine=False)
 
     def _maybe_restart(self) -> None:
         """A rematch starts once *both* sides have asked for one (lock held)."""
@@ -279,9 +294,30 @@ class NetworkOpponent:
         with self._cv:
             if self._error is not None:
                 return f"{self.name} has left."
-            if self._rematch_recv:
-                return f"{self.name} wants to play again."
-        return ""
+            again = self._rematch_recv
+        parts = []
+        said = self.chat.latest_from_them()
+        if said:
+            parts.append(f"{self.name}: {said}")
+        if again:
+            parts.append(f"{self.name} wants to play again.")
+        return "   |   ".join(parts)
+
+    def say(self, text: str) -> Optional[str]:
+        """Send a chat message. Returns None once sent, or why it wasn't (a sentence)."""
+        if not self.can_chat:
+            return f"{self.name}'s game is an older version without chat."
+        error = chat.chat_error(text)
+        if error:
+            return error
+        tidy = chat.tidy(text)
+        try:
+            self._check()
+            self._send(proto.Chat(tidy))
+        except NetError as exc:
+            return str(exc)
+        self.chat.add(tidy, mine=True)
+        return None
 
     @property
     def error(self) -> Optional[NetError]:

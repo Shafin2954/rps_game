@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from .. import chat
 from .. import profile as profile_store
 from ..dualsetup import DualSetup
 from ..engine import Outcome
@@ -26,6 +27,7 @@ AFTER_GAME = [
     Option("Play again", "again", "Ask your opponent for another game"),
     Option("Back to the menu", "menu", "Leave this match"),
 ]
+SAY = Option("Send a message", "say", "Say something to your opponent")
 
 
 def _game_outcome(result) -> Optional[Outcome]:
@@ -59,6 +61,8 @@ def play_dual(ui: GameUI, setup: DualSetup, connection: Connection, *,
     NetworkOpponent; tests use them to stay fast."""
     opponent = NetworkOpponent(connection, **options)
     ui.set_players(Seat(setup.name, setup.side), Seat(connection.opponent_name, setup.side.other))
+    if opponent.can_chat:
+        ui.set_chat(opponent.chat, opponent.say)
     terms = connection.terms
     config = GameConfig(difficulty="", rounds=terms.rounds, first_to=terms.first_to, one_game=True)
     try:
@@ -73,15 +77,36 @@ def play_dual(ui: GameUI, setup: DualSetup, connection: Connection, *,
                 ui.message("Game over", [result.end_reason or f"{opponent.name} left the game.",
                                          "You win by forfeit.", *earned], crumbs=CRUMBS)
                 return False
-            choice = ui.results_menu("Game over", result.session, result.finished, AFTER_GAME,
-                                     idle=opponent.results_status, extra=earned)
+            choice = _after_game(ui, opponent, result, earned)
             if choice != "again":
                 return False
             if not _rematch(ui, opponent):
                 return False
     finally:
         opponent.close("quit")
+        ui.set_chat()
         ui.set_players(Seat("You", Side.LEFT), Seat("Computer", Side.RIGHT))   # back to single-player
+
+
+def _after_game(ui: GameUI, opponent: NetworkOpponent, result, earned: list[str]) -> Optional[str]:
+    """The game-over menu. With chat, "Send a message" loops back to the same menu."""
+    options = [*AFTER_GAME, SAY] if opponent.can_chat else AFTER_GAME
+    first = True
+    while True:
+        talk = [f"{speaker}: {text}" for speaker, text, _ in opponent.chat.recent(3)]
+        opponent.chat.unread()                              # they are on screen now
+        choice = ui.results_menu("Game over", result.session, result.finished, options,
+                                 idle=opponent.results_status, extra=[*earned, *talk],
+                                 celebrate=first)
+        first = False
+        if choice != "say":
+            return choice
+        text = ui.ask_text(f"Message to {opponent.name}", crumbs=CRUMBS,
+                           validator=chat.chat_error, max_cells=chat.MAX_CELLS)
+        if text is not None:
+            error = opponent.say(text)
+            if error:
+                ui.message("Not sent", [error], crumbs=CRUMBS)
 
 
 def _rematch(ui: GameUI, opponent: NetworkOpponent) -> bool:

@@ -7,6 +7,7 @@ with colour or a bar is also said in words and numbers.
 """
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass, field, replace
 from typing import Optional, Sequence
@@ -19,9 +20,11 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from .. import art, terminal
+from .. import art, fx, terminal
 from ..engine import Move, Outcome
-from ..ui import CPU_STYLE, OUTCOME_STYLE, OUTCOME_TEXT, PLAYER_STYLE, QUIT_WORDS, GameUI, Option
+from ..ui import (BEATEN_STYLE, BURST_STYLE, CPU_STYLE, OUTCOME_STYLE, OUTCOME_TEXT, PLAYER_STYLE,
+                  QUIT_WORDS, GameUI, Option)
+from . import banter
 from .foes import FLOORS, FoeSpec
 from .relics import RELICS, Relic
 from .rules import TECHNIQUE_TEXT, TRAITS, Duel, Exchange, Technique
@@ -30,6 +33,7 @@ from .run import REST_HEAL, FightReport, Run
 COLUMN = 34                         # each fighter's column of text, in cells
 BLOCK = 2 * COLUMN
 MARGIN = (COLUMN - art.WIDTH) // 2  # blank cells either side of a hand in its column
+CLASH_REACH = MARGIN - 1            # how far a hand lunges before the two meet
 MIN_ART_COLUMNS = BLOCK + 2
 MIN_ART_ROWS = 24
 BAR = 12                            # cells in a health bar
@@ -112,6 +116,11 @@ class _View:
     right_word: str = "?"
     spread: int = 0
     lift: int = 0
+    close: int = 0                              # the clash, as in fx.Beat
+    back: tuple[int, int] = (0, 0)
+    burst: Sequence[str] = ()
+    shake: int = 0
+    beaten: tuple[bool, bool] = (False, False)
     caption: Text = field(default_factory=_line)
     detail: Text = field(default_factory=_line)
     prompt: Text = field(default_factory=_line)
@@ -125,6 +134,9 @@ class GauntletScreens:
         self.console = ui.console
         self._live: Optional[Live] = None
         self._view = _View()
+        self._chatter = random.Random()             # reseeded per fight, so a seed replays
+        self._said = ""                             # the foe's latest line, kept for the next round
+        self._last_words = ""                       # what it said before that
 
     # ================================================================ small pieces
 
@@ -235,6 +247,8 @@ class GauntletScreens:
     def begin_fight(self, run: Run) -> None:
         duel, spec, hero = run.duel, run.foe, run.hero
         assert duel is not None
+        self._chatter = random.Random(f"{run.seed}|banter|{run.floor}")
+        self._said = self._last_words = ""
         self._view = _View(
             foe_name=spec.full_name.upper(), foe_facts=foe_facts(spec),
             hero_hp=hero.hp, hero_max=hero.max_hp, focus=hero.focus, max_focus=hero.max_focus,
@@ -270,15 +284,16 @@ class GauntletScreens:
             title="   |   ".join(["GAUNTLET", f"Floor {run.floor} of {FLOORS}",
                                   f"Round {duel.round_number}", self._seed_text(run)]),
             left_art=art.FIST_RIGHT, right_art=art.FIST_LEFT, left_word="?", right_word="?",
-            spread=0, lift=0,
+            spread=0, lift=0, close=0, back=(0, 0), burst=(), shake=0, beaten=(False, False),
             hero_hp=hero.hp, hero_max=hero.max_hp, focus=hero.focus, max_focus=hero.max_focus,
             shield=hero.shield, foe_hp=duel.foe.hp, foe_max=duel.foe.max_hp,
             caption=_line("Your move!", "dim"),
             detail=Text(f'"{spec.tell}"', style="dim italic", justify="center", no_wrap=True),
             prompt=self._prompt(duel, None),
-            notice=_line(scouted, "bold"),
+            notice=_line(scouted, "bold") if scouted else _line(self._said, "italic magenta"),
             history=tuple(duel.exchanges),
         )
+        self._said = ""
 
     def _prompt(self, duel: Duel, armed: Optional[Technique]) -> Text:
         """The keys on offer. Techniques are dimmed when there is no Focus for them
@@ -391,11 +406,18 @@ class GauntletScreens:
         assert duel is not None
         text = headline(x, spec.name)
         notes = self._dot().join(x.notes)
+        words = banter.quip(spec.key, duel, x, self._chatter, avoid=self._last_words)
+        if duel.over:
+            words = banter.last_words(spec.key, hero_won=duel.won)
+        self._last_words = words or self._last_words
+        self._said = f'{spec.name}: "{words}"' if words else ""
         if self._live is None:
             self._say(f"You played {x.round.player}. {spec.name} played {x.round.opponent}.")
             self._say(text)
             if notes:
                 self._say(notes)
+            if self._said:
+                self._say(self._said)
             return
 
         if self.ui.animate:
@@ -405,9 +427,13 @@ class GauntletScreens:
             left_art=art.HANDS_RIGHT[x.round.player], right_art=art.HANDS_LEFT[x.round.opponent],
             left_word=str(x.round.player), right_word=str(x.round.opponent), spread=0, lift=0,
             caption=_line(text.upper(), style), detail=_line(notes, "dim"),
-            prompt=_line(), notice=_line(), history=tuple(duel.exchanges),
+            prompt=_line(), notice=_line(self._said, "italic magenta"),
+            history=tuple(duel.exchanges),
             focus=hero.focus, max_focus=hero.max_focus, shield=hero.shield,
         )
+        animated = self.ui.animate and self._art_on()
+        if animated:
+            self._clash(x)
         # Drain the bars a step at a time so the hit reads as a hit.
         before_hero, before_foe = self._view.hero_hp, self._view.foe_hp
         steps = 3 if self.ui.animate else 1
@@ -419,7 +445,32 @@ class GauntletScreens:
             )
             if self.ui.animate:
                 time.sleep(0.07)
+        if animated and duel.over:
+            self._knock_out(hero_fell=not duel.won)
         self.ui._pause(HOLD_RESULT)
+
+    def _clash(self, x: Exchange) -> None:
+        """The hands meet: the loser's is crushed, wrapped or cut (see fx.clash)."""
+        outcome = x.round.outcome
+        shade = "#" if self.ui.ascii_only else fx.SHADE
+        beats = fx.clash(
+            art.HANDS_RIGHT[x.round.player], art.HANDS_LEFT[x.round.opponent],
+            winner={Outcome.WIN: 0, Outcome.LOSS: 1}.get(outcome),
+            move=x.round.player if outcome is Outcome.WIN else x.round.opponent,
+            reach=CLASH_REACH, shade=shade,
+        )
+        for beat in beats:
+            self._draw(left_art=beat.left, right_art=beat.right, close=beat.close,
+                       back=beat.back, burst=beat.burst, shake=beat.shake, beaten=beat.beaten)
+            time.sleep(beat.hold)
+
+    def _knock_out(self, *, hero_fell: bool) -> None:
+        """Whoever just hit 0 HP crumbles to dust under a K.O. burst."""
+        fallen = self._view.left_art if hero_fell else self._view.right_art
+        for frame in fx.dissolve(fallen, 6, random.Random()):
+            change = {"left_art": frame} if hero_fell else {"right_art": frame}
+            self._draw(burst=fx.KO, **change)
+            time.sleep(0.07)
 
     def _countdown(self) -> None:
         blank = {"caption": _line(), "detail": _line(), "prompt": _line(), "notice": _line(),
@@ -488,12 +539,20 @@ class GauntletScreens:
         pips = self._pips(v.focus, v.max_focus, v.shield)
         parts: list[RenderableType] = [_line(v.title, "bold"), _line()]
         if self._art_on():
-            pad = " " * max(0, (self.console.width - BLOCK) // 2)
-            rows = [
-                Text.assemble(pad, " " * (MARGIN - v.spread), (left, PLAYER_STYLE),
-                              " " * (2 * MARGIN + 2 * v.spread), (right, CPU_STYLE))
-                for left, right in zip(v.left_art, v.right_art)
-            ]
+            edge = max(0, (self.console.width - BLOCK) // 2)
+            left_x = edge + MARGIN - v.spread + v.close - v.back[0] + v.shake
+            right_x = (edge + COLUMN + MARGIN + v.spread - v.close + v.back[1] + v.shake)
+            styles = {
+                "left": BEATEN_STYLE[PLAYER_STYLE] if v.beaten[0] else PLAYER_STYLE,
+                "right": BEATEN_STYLE[CPU_STYLE] if v.beaten[1] else CPU_STYLE,
+                "burst": BURST_STYLE,
+            }
+            rows: list[RenderableType] = []
+            for text, spans in fx.compose(v.left_art, v.right_art, left_x, right_x, v.burst):
+                row = Text(text, no_wrap=True)
+                for start, end, role in spans:
+                    row.stylize(styles[role], start, end)
+                rows.append(row)
             rows = [_line()] * v.lift + rows + [_line()] * (1 - v.lift)
             rule = Rule(characters="=", style="dim")
             parts += [
@@ -579,6 +638,8 @@ class GauntletScreens:
             *extra,
         ]
         self.end_fight()
+        if run.victory:
+            self.ui.celebrate("CONQUERED!", seconds=3.5)
         if self.ui.plain:
             self._say()
             self._say(title, "bold")

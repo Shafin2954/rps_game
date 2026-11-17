@@ -12,6 +12,7 @@ Results are always spelled out in words, never conveyed by colour alone.
 from __future__ import annotations
 
 import getpass
+import random
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -27,8 +28,9 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from . import art, terminal
-from .engine import Match, Move, Outcome, Round, Score
+from . import art, fx, terminal
+from .chat import MAX_CELLS as MAX_CHAT_CELLS
+from .engine import MOVES, Match, Move, Outcome, Round, Score
 from .insight import reaction_tells
 from .players import Seat, Side
 from .stats import Stats
@@ -42,6 +44,10 @@ HOLD_SCORE = 0.9                            # seconds the updated score stays up
 
 PLAYER_STYLE = "bold cyan"
 CPU_STYLE = "bold magenta"
+BEATEN_STYLE = {PLAYER_STYLE: "dim cyan", CPU_STYLE: "dim magenta"}   # a hand that just lost
+BURST_STYLE = "bold yellow"
+CLASH_REACH = (GAP - 2) // 2                # how far a hand lunges before the two meet
+TAGLINE = "Read the hand. Break the pattern."
 QUIT_WORDS = {"q", "quit", "exit"}
 BACK_WORDS = {"q", "b", "back", "quit", "exit"}
 OUTCOME_STYLE = {
@@ -132,6 +138,12 @@ class _View:
     right_move: str = "?"
     spread: int = 0
     lift: int = 0
+    # The clash (see fx.Beat): hands lunging in, knocked back, a burst between them.
+    close: int = 0
+    back: tuple[int, int] = (0, 0)
+    burst: Sequence[str] = ()
+    shake: int = 0
+    beaten: tuple[bool, bool] = (False, False)
     caption: Text = field(default_factory=_line)
     prompt: Text = field(default_factory=_line)
     notice: Text = field(default_factory=_line)
@@ -275,6 +287,17 @@ class GameUI:
         self._wait_text = ""
         self.you = Seat("You", Side.LEFT)
         self.opponent = Seat("Computer", Side.RIGHT)
+        self._chat = None                  # a chat.ChatLog while an online game has chat
+        self._send_chat: Optional[Callable[[str], Optional[str]]] = None
+        self._chat_drawn = 0
+
+    def set_chat(self, log=None, send: Optional[Callable[[str], Optional[str]]] = None) -> None:
+        """Turn chat on for an online game, or off again (no arguments).
+
+        ``log`` is the conversation (a ``chat.ChatLog``); ``send(text)`` returns None
+        once a message has gone, or a sentence saying why it didn't."""
+        self._chat, self._send_chat = log, send
+        self._chat_drawn = 0
 
     def set_players(self, you: Seat, opponent: Seat) -> None:
         """Say who is playing and where each hand goes on *this* screen."""
@@ -639,6 +662,111 @@ class GameUI:
             self._clear()
         self._say("Thanks for playing!", "bold")
 
+    # -- theatre -----------------------------------------------------------
+
+    def _wait(self, seconds: float) -> bool:
+        """Sleep for an animation frame. False if a key was pressed (skip the rest)."""
+        return terminal.read_key(timeout=seconds) is None
+
+    def splash(self) -> None:
+        """A moment of theatre before the main menu: the logo wipes in and two hands
+        throw down. Any key skips it; it only plays on a real, roomy terminal."""
+        if not (self.animate and self._interactive()):
+            return
+        self._logo()
+        if self._logo_text is None:                      # too small for the banner
+            return
+        logo = self._logo_text.splitlines()
+        width = max(len(line) for line in logo)
+        with_hands = self._art_on()
+        view = _View(spread=self._max_spread())
+        live = Live(console=self.console, auto_refresh=False)
+
+        def frame(shown: int, tagline: bool = False) -> None:
+            banner = "\n".join(line[:shown].ljust(width) for line in logo)
+            parts: list[RenderableType] = [Align.center(Text(banner, style="bold cyan")), _line()]
+            if with_hands:
+                parts += self._hand_rows(view)
+            parts += [_line(), _line(TAGLINE if tagline else "", "bold")]
+            live.update(self._vcenter(parts), refresh=True)
+
+        terminal.flush_input()
+        self._clear()
+        live.start()
+        try:
+            for shown in range(0, width + 5, 5):                     # the logo wipes in
+                frame(shown)
+                if not self._wait(0.012):
+                    return
+            if with_hands:
+                for spread in range(self._max_spread(), -1, -1):         # fists close in
+                    view.spread = spread
+                    frame(width)
+                    if not self._wait(0.012):
+                        return
+                for lift in (1, 0, 1, 0):                                # and pump
+                    view.lift = lift
+                    frame(width)
+                    if not self._wait(0.09):
+                        return
+                mine = random.choice(MOVES)
+                theirs = random.choice([mine.beats, mine.beaten_by])
+                winner = 0 if mine.beats is theirs else 1
+                shade = "#" if self.ascii_only else fx.SHADE
+                for beat in fx.clash(art.HANDS_RIGHT[mine], art.HANDS_LEFT[theirs], winner=winner,
+                                     move=(mine, theirs)[winner], reach=CLASH_REACH, shade=shade):
+                    view = replace(view, left_art=beat.left, right_art=beat.right, spread=0,
+                                   lift=0, close=beat.close, back=beat.back, burst=beat.burst,
+                                   shake=beat.shake, beaten=beat.beaten)
+                    frame(width)
+                    if not self._wait(beat.hold or 0.01):
+                        return
+            frame(width, tagline=True)
+            self._wait(0.7)
+        finally:
+            live.stop()
+
+    def celebrate(self, title: str, seconds: float = 2.2) -> None:
+        """Fireworks behind a big title, for the wins that matter. Any key skips it;
+        without animation (or a real terminal) it does nothing at all."""
+        if not (self.animate and self._interactive()):
+            return
+        width, height = self.console.width, max(4, self.console.height - 1)
+        banner = pyfiglet.figlet_format(title, font="slant", width=200).rstrip("\n").splitlines()
+        if max(len(line) for line in banner) > width - 2 or len(banner) > height - 2:
+            banner = [title]
+        top = (height - len(banner)) // 2
+        terminal.flush_input()
+        self._clear()
+        live = Live(console=self.console, auto_refresh=False, transient=True)
+        live.start()
+        try:
+            for cells in fx.fireworks(width, height, frames=int(seconds / 0.05),
+                                      rng=random.Random()):
+                canvas = [[" "] * width for _ in range(height)]
+                lit: list[list[tuple[int, str]]] = [[] for _ in range(height)]
+                for x, y, char, colour in cells:
+                    canvas[y][x] = char
+                    lit[y].append((x, colour))
+                rows = []
+                for y in range(height):
+                    line = banner[y - top] if top <= y < top + len(banner) else ""
+                    start = (width - len(line)) // 2
+                    for i, char in enumerate(line):                  # the title stays readable
+                        if char != " ":
+                            canvas[y][start + i] = char
+                    row = Text("".join(canvas[y]), no_wrap=True)
+                    for x, colour in lit[y]:
+                        row.stylize(f"bold {colour}", x, x + 1)
+                    if line:
+                        row.stylize("bold bright_white", start, start + len(line))
+                    rows.append(row)
+                live.update(Group(*rows), refresh=True)
+                if not self._wait(0.05):
+                    break
+        finally:
+            live.stop()
+
     # -- game intro ----------------------------------------------------------
 
     def intro(self, *, best_of: Optional[int], rounds: Optional[int], difficulty: str,
@@ -673,6 +801,7 @@ class GameUI:
         if self.plain:
             self._say()
             self._say(f"Round {number}{of}", "bold")
+            self._print_chat()
             return
         self._board = self._snapshot(match, session)
         self._view = _View(
@@ -698,16 +827,23 @@ class GameUI:
             if text != self._wait_text:
                 self._wait_text = text
                 self._say(text, "dim")
+            self._print_chat()
             return True
-        if text != self._wait_text:
-            self._wait_text = text
-            self._draw(prompt=_line(text, "bold"),
-                       notice=_line("Press q to leave (you forfeit the game)", "dim"))
+        said = self._chat.count if self._chat is not None else 0
+        if text != self._wait_text or said != self._chat_drawn:
+            self._wait_text, self._chat_drawn = text, said
+            hint = "Press q to leave (you forfeit the game)"
+            if self._send_chat is not None:
+                hint += "   t to talk"
+            self._draw(prompt=_line(text, "bold"), notice=_line(hint, "dim"))
         key = terminal.read_key(timeout=0) if self._interactive() else None
         if key and (key.lower() == "q" or key == terminal.KEY_ESC):
             if not leave_prompt or self._confirm_leave(leave_prompt):
                 return False
             self._wait_text = ""                     # screen was rebuilt: draw the text again
+        elif key and key.lower() == "t" and self._send_chat is not None:
+            self._chat_entry()
+            self._wait_text = ""
         return True
 
     def end_round(self) -> None:
@@ -729,12 +865,19 @@ class GameUI:
         return self._ask_key(idle, leave_prompt)
 
     def _ask_line(self, leave_prompt: str = "") -> Optional[Move]:
+        talk = self._send_chat is not None
+        prompt = ("Your move (rock, paper, scissors, say <message>, or quit): " if talk
+                  else "Your move (rock, paper, scissors, or quit): ")
         while True:
-            raw = input("Your move (rock, paper, scissors, or quit): ")
+            self._print_chat()
+            raw = input(prompt)
             if raw.strip().lower() in QUIT_WORDS:
                 if leave_prompt and not self.confirm(leave_prompt):
                     continue
                 return None
+            if talk and raw.strip().lower().split(" ", 1)[0] == "say":
+                self._say(self._send_chat(raw.strip()[3:]) or "Sent.")
+                continue
             move = Move.parse(raw)
             if move:
                 return move
@@ -743,16 +886,68 @@ class GameUI:
                 "Use r, p, s, 1, 2, 3, a full word, or q to quit."
             )
 
-    @staticmethod
-    def _choices_prompt() -> Text:
+    def _choices_prompt(self) -> Text:
+        talk = ("[", ("t", "bold"), "]alk   ") if self._send_chat is not None else ()
         return Text.assemble(
             "Choose: ",
             "[", ("r", "bold"), "]ock   ",
             "[", ("p", "bold"), "]aper   ",
             "[", ("s", "bold"), "]cissors   ",
+            *talk,
             "[", ("q", "bold"), "]uit",
             justify="center",
         )
+
+    # -- chat --------------------------------------------------------------
+
+    def _print_chat(self) -> None:
+        """Line-based screens: say what the other player has written since last time."""
+        if self._chat is not None:
+            for line in self._chat.unread():
+                self._say(line)
+
+    def _chat_lines(self) -> list[Text]:
+        """The newest messages, for the bottom of the round screen."""
+        if self._chat is None:
+            return []
+        lines = []
+        for speaker, text, mine in self._chat.recent(2 if self.console.height >= 28 else 1):
+            line = Text(justify="center", no_wrap=True)
+            line.append(f"{speaker}: ", style="cyan" if mine else "magenta")
+            line.append(text)
+            lines.append(line)
+        return lines
+
+    def _chat_entry(self, idle: Optional[Callable[[], str]] = None) -> None:
+        """Type a message on the round screen itself. Enter sends it, Esc cancels.
+        ``idle`` keeps being polled, so a vanished opponent still ends the game."""
+        before = (self._view.prompt, self._view.notice)
+        text, hint, style = "", "Enter send   Esc cancel", "dim"
+        while True:
+            self._draw(prompt=_line(f"Say: {text}_", "bold cyan"), notice=_line(hint, style))
+            key = terminal.read_key(timeout=0.25)
+            if key is None:
+                if idle is not None:
+                    idle()
+                continue
+            hint, style = "Enter send   Esc cancel", "dim"
+            if key == terminal.KEY_ESC:
+                break
+            if key == terminal.KEY_BACKSPACE:
+                text = text[:-1]
+            elif key == "\x15":                             # Ctrl-U clears the line
+                text = ""
+            elif key == terminal.KEY_ENTER:
+                error = self._send_chat(text) if text.strip() else None
+                if error is None:
+                    break
+                hint, style = error, "yellow"
+            elif len(key) == 1 and (key.isprintable() or key in "\u200c\u200d"):
+                if cell_len(text + key) <= MAX_CHAT_CELLS:
+                    text += key
+                else:
+                    hint, style = f"That is the maximum length ({MAX_CHAT_CELLS}).", "yellow"
+        self._draw(prompt=before[0], notice=before[1])
 
     def _confirm_leave(self, question: str) -> bool:
         """Ask "really leave?" over the round screen, and put the screen back if not."""
@@ -772,14 +967,19 @@ class GameUI:
         while True:
             if idle is not None:
                 status = idle()
-                if status != last:
-                    last = status
+                stamp = (status, self._chat.count if self._chat is not None else 0)
+                if stamp != last:                           # new status, or someone spoke
+                    last = stamp
                     self._draw(notice=_line(status, "dim"))
                 key = terminal.read_key(timeout=0.25)
                 if key is None:
                     continue
             else:
                 key = terminal.read_key()
+            if key.lower() == "t" and self._send_chat is not None:
+                self._chat_entry(idle)
+                last = None
+                continue
             if key.lower() == "q":
                 if leave_prompt and not self._confirm_leave(leave_prompt):
                     last = None
@@ -819,7 +1019,11 @@ class GameUI:
         if v.board is not None:
             parts += self._scoreboard_heading(SCOREBOARD_BIG_MIN_ROWS)
             parts.append(Align.center(self._board_table(v.board)))
-        parts += [_line(), v.prompt, v.notice]
+        said = self._chat_lines()
+        if said and self.console.height < 26:          # no room to spare: use the blank line
+            parts += [said[-1], v.prompt, v.notice]
+        else:
+            parts += [_line(), v.prompt, v.notice, *said]
         return self._vcenter(parts)
 
     def _arena(self, v: _View) -> list[RenderableType]:
@@ -831,13 +1035,28 @@ class GameUI:
             pad, (center_cells(left_seat.name.upper(), w), "bold"), " " * gap,
             (center_cells(right_seat.name.upper(), w), "bold"),
         )
-        rows = [
-            Text.assemble(pad, (l, PLAYER_STYLE), " " * gap, (r, CPU_STYLE))
-            for l, r in zip(v.left_art, v.right_art)
-        ]
-        rows = [_line()] * v.lift + rows + [_line()] * (1 - v.lift)
         rule = Rule(characters="=", style="dim")
-        return [header, rule, *rows, rule]
+        return [header, rule, *self._hand_rows(v), rule]
+
+    def _hand_rows(self, v: _View) -> list[RenderableType]:
+        """The two hands (and any burst between them) as HEIGHT + 1 rows."""
+        w = art.WIDTH
+        gap = GAP + 2 * v.spread
+        margin = max(0, (self.console.width - (2 * w + gap)) // 2)
+        left_x = margin + v.close - v.back[0] + v.shake
+        right_x = margin + w + gap - v.close + v.back[1] + v.shake
+        styles = {
+            "left": BEATEN_STYLE[PLAYER_STYLE] if v.beaten[0] else PLAYER_STYLE,
+            "right": BEATEN_STYLE[CPU_STYLE] if v.beaten[1] else CPU_STYLE,
+            "burst": BURST_STYLE,
+        }
+        rows: list[RenderableType] = []
+        for text, spans in fx.compose(v.left_art, v.right_art, left_x, right_x, v.burst):
+            row = Text(text, no_wrap=True)
+            for start, end, role in spans:
+                row.stylize(styles[role], start, end)
+            rows.append(row)
+        return [_line()] * v.lift + rows + [_line()] * (1 - v.lift)
 
     def _seats_by_side(self) -> tuple[Seat, Seat]:
         """(left seat, right seat) as drawn on this screen."""
@@ -897,9 +1116,12 @@ class GameUI:
 
     # -- showing a round ---------------------------------------------------
 
-    def show_round(self, rnd: Round, match: Match, session: Score) -> None:
+    def show_round(self, rnd: Round, match: Match, session: Score, *, said: str = "") -> None:
+        """Reveal a finished round. ``said`` is a line from the opponent, if it spoke."""
         if self.plain:
             self._show_round_plain(rnd, match, session)
+            if said:
+                self._say(said)
             return
 
         verdict = OUTCOME_TEXT[rnd.outcome].upper()
@@ -919,13 +1141,23 @@ class GameUI:
             spread=0, lift=0,
             caption=_line(verdict, OUTCOME_STYLE[rnd.outcome]),
             prompt=_line(f"You played {rnd.player}. {self.opponent.name} played {rnd.opponent}."),
-            notice=_line(),
+            notice=_line(said, "italic magenta"),
         )
+        if self.animate and self._art_on():
+            mine = 0 if self.you.side is Side.LEFT else 1
+            self._animate_clash(
+                left_art, right_art,
+                winner={Outcome.WIN: mine, Outcome.LOSS: 1 - mine}.get(rnd.outcome),
+                move=rnd.player if rnd.outcome is Outcome.WIN else rnd.opponent,
+            )
         self._pause(HOLD_REVEAL)
 
         # Score updates here, then the next round wipes the hands away.
         self._board = self._snapshot(match, session)
-        self._draw(board=self._board, notice=self._match_notice(match))
+        if match.is_over or not said:                  # a finished match outranks small talk
+            self._draw(board=self._board, notice=self._match_notice(match))
+        else:
+            self._draw(board=self._board)
         self._pause(HOLD_SCORE)
 
     def _match_notice(self, match: Match) -> Text:
@@ -935,6 +1167,15 @@ class GameUI:
         if match.max_rounds is None:
             text += " A new match starts next round."
         return _line(text, style)
+
+    def _animate_clash(self, left_art, right_art, *, winner: Optional[int], move: Move) -> None:
+        """The hands lunge and meet; the beaten one is crushed, wrapped or cut."""
+        shade = "#" if self.ascii_only else fx.SHADE
+        for beat in fx.clash(left_art, right_art, winner=winner, move=move,
+                             reach=CLASH_REACH, shade=shade):
+            self._draw(left_art=beat.left, right_art=beat.right, close=beat.close,
+                       back=beat.back, burst=beat.burst, shake=beat.shake, beaten=beat.beaten)
+            time.sleep(beat.hold)
 
     def _animate_countdown(self) -> None:
         art_on = self._art_on()
@@ -973,6 +1214,7 @@ class GameUI:
         self._say(
             f"Score: {session.wins} wins, {session.losses} losses, {session.draws} draws"
         )
+        self._print_chat()
 
     # -- statistics and results -------------------------------------------
 
@@ -1030,9 +1272,12 @@ class GameUI:
 
     def results_menu(self, title: str, session: Score, finished: Optional[Match],
                      options: Sequence[Option], *, idle: Optional[Callable[[], str]] = None,
-                     back_label: str = "leave", extra: Sequence[str] = ()) -> Optional[str]:
+                     back_label: str = "leave", extra: Sequence[str] = (),
+                     celebrate: bool = True) -> Optional[str]:
         """Game over: the result and scoreboard with a menu underneath."""
         self.end_round()
+        if celebrate and finished is not None and finished.winner is Outcome.WIN:
+            self.celebrate("YOU WIN!")
         rich, plain = self._results_header(session, None, None, finished, extra)
         return self.choose(title, options, back_label=back_label, header=rich,
                            plain_header=plain, idle=idle)
@@ -1052,6 +1297,8 @@ class GameUI:
         key (used when returning to the menu); otherwise it stays on screen.
         ``extra`` lines follow the scoreboard: the mind reader's verdict, XP, unlocks."""
         self.end_round()
+        if finished is not None and finished.winner is Outcome.WIN:
+            self.celebrate("YOU WIN!")
         rich, plain = self._results_header(session, matches, lifetime, finished, extra)
         if self.plain:
             self._say()

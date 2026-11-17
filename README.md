@@ -9,10 +9,12 @@ Rock Paper Scissors for your terminal, turned into a game of reading minds.
   cannot be out-guessed, only out-randomised.
 - **The mind reader** - after a game, see how predictable you were and which habits gave
   you away.
-- **Dual Player** - play a friend online with passkey-protected, cheat-proof rounds, and keep
-  a head-to-head record.
-- Rank, experience and achievements across every mode; ASCII hands and a countdown; and a
-  screen-reader friendly plain mode for all of it.
+- **Dual Player** - play a friend online with passkey-protected, cheat-proof rounds, chat
+  while you play, and keep a head-to-head record.
+- **ASCII theatre** - hands lunge and collide: rock crushes, paper wraps, scissors slice.
+  Beaten foes crumble to dust, big wins set off fireworks, and your opponents talk back.
+- Rank, experience and achievements across every mode, and a screen-reader friendly plain
+  mode for all of it.
 
 ## Install
 
@@ -54,7 +56,7 @@ rps -d easy -r 10      # exactly 10 rounds, highest score wins (ties are possibl
 rps -f 3               # first to 3 wins takes the game (draws don't count)
 rps -b 5               # same as -f 3, phrased as best of 5
 rps --plain            # no art, colour or animation; type words and press Enter
-rps --no-animation     # keep the art, skip the countdown
+rps --no-animation     # keep the art, skip the countdown, clashes, splash and fireworks
 rps --stats            # lifetime statistics (saved between sessions)
 rps --profile          # your rank, Gauntlet records and achievements
 rps --no-save          # play without recording the session
@@ -63,8 +65,10 @@ rps --update           # upgrade from GitHub
 python -m rps_game     # same as `rps`
 ```
 
-The screen is redrawn every round: fists, a countdown, the reveal, then the
-scoreboard updates and the hands are wiped for the next round. Stats are stored in
+The screen is redrawn every round: fists, a countdown, the reveal and the clash (the
+losing hand is crushed, wrapped or cut in two), then the scoreboard updates and the
+hands are wiped for the next round. Winning a game sets off fireworks; any key skips
+them, and the opening splash. Stats are stored in
 `~/.local/share/rps-game-cli/stats.json` (platform equivalent elsewhere; override
 with `RPS_STATS_FILE`); your rank, achievements and records sit next to it in
 `profile.json` (`RPS_PROFILE_FILE`).
@@ -108,6 +112,12 @@ In a fight: `r` / `p` / `s` throw, `f` / `g` / `c` arm a technique (press again 
 Guard or Charge), `i` shows the foe's traits and your relics, `q` abandons the run. Plain
 mode takes the same letters, or the words, one per line.
 
+The foes talk. Each has its own lines for winning a round, losing one, falling and
+finishing you off, and they stay in character, so listen: Echo's "You repeated yourself.
+They always do." is a tell too. The Oracle only speaks when it is sure, and then it tells
+you exactly how it read you ("After a loss you always make the same step. I was already
+there."). It does the same in single player with `-d oracle`.
+
 ### The mind reader, rank and achievements
 
 Any single-player game of eight rounds or more ends with a reading: how often a pattern
@@ -137,6 +147,12 @@ way to share a room code and passkey (a chat message is fine).
   scoreboard (your connection's round-trip time is shown in the title). When the game ends you can
   *Play again*, which needs both players to agree and reuses the connection, so there is no new
   passkey to enter, or return to the menu.
+- **Chat.** Press `t` on the round screen (or while waiting for the other player) and type;
+  Enter sends, Esc cancels. The latest lines sit under the scoreboard on both screens, and
+  the game-over menu has *Send a message* for the "gg". In `--plain` mode type
+  `say your message` instead of a move. Messages are one short line of ordinary characters:
+  anything that could garble a terminal is refused on both ends. Chat needs both games on
+  4.1 or newer; against an older game it is simply switched off and everything else works.
 - **Leaving is a forfeit.** Quitting (you are asked to confirm), closing the program, losing your
   connection for 30 seconds or taking more than two minutes to choose counts as a win for the other
   player.
@@ -156,7 +172,8 @@ way to share a room code and passkey (a chat message is fine).
   therefore cannot wait to see your move before choosing its own, and cannot change its mind
   afterwards. A mismatch ends the game and you win. The two games also compare a running hash of
   all earlier rounds, so they can never silently disagree about the score.
-- Everything received from the other side is validated strictly (size, types, names).
+- Everything received from the other side is validated strictly (size, types, names, chat
+  text). A flood of chat messages is dropped rather than shown.
 - What the mailbox *can* see: your IP address, the room code and message timing, not names or
   moves. The default mailbox address is plain `ws://`, so a network observer sees those too.
 - No guarantee of uptime: the public mailbox is volunteer-run. Both players must use the same one.
@@ -177,7 +194,7 @@ also holds two preferences: **Show stats after each game** (off by default: the 
 screen then shows only the game you just played) and **Reset statistics**, which wipes your
 results, rank and achievements.
 
-Game keys: `r` / `p` / `s` (or `1` / `2` / `3`), `q` to quit. In `--plain` mode you can
+Game keys: `r` / `p` / `s` (or `1` / `2` / `3`), `q` to quit, `t` to talk in an online game. In `--plain` mode you can
 also type the full word. Set `NO_COLOR=1` to disable colour.
 
 ## Difficulty
@@ -205,8 +222,9 @@ pytest
 `pip install -e ".[dev]"` also installs a local mailbox server, which the network
 integration tests start on a random local port (they never touch the public one).
 
-Layout: `gauntlet/` (`rules.py` the duel, `foes.py`, `relics.py`, `run.py` one climb, `screens.py`, `play.py`) ·
+Layout: `gauntlet/` (`rules.py` the duel, `foes.py`, `banter.py`, `relics.py`, `run.py` one climb, `screens.py`, `play.py`) ·
 `oracle.py` (the Oracle) · `insight.py` (the mind reader) · `profile.py` (rank, achievements, head-to-head) ·
+`fx.py` (the ASCII effects, as pure frame data) · `chat.py` (message rules and the conversation log) ·
 `net/` (protocol, session handshake, transport, connection screens) · `engine.py` (pure rules) · `strategies.py` (computer players) ·
 `ui.py` (menus, screens, input) · `menu.py` (menu flow) · `stats.py` (saved stats) · `art.py` · `terminal.py` (keyboard) · `cli.py` (entry point).
 
