@@ -12,9 +12,10 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
-from .engine import Move, Score
+from .engine import Move, Outcome, Round, Score
+from .insight import count_reactions, merge_reactions
 
 APP_DIR = "rps-game-cli"
 FILE_VERSION = 1
@@ -48,6 +49,9 @@ class Stats:
     best_streak: int = 0
     sessions: int = 0
     moves: dict[str, int] = field(default_factory=dict)
+    # How you react to each result: {"win": {"stay": n, "up": n, "down": n}, ...}.
+    # See insight.py for what the steps mean.
+    habits: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def rounds(self) -> int:
@@ -65,10 +69,16 @@ class Stats:
         name, count = max(self.moves.items(), key=lambda item: item[1])
         return name, count / total
 
-    def merge(self, session: Score, matches: Score, picks: Iterable[Move]) -> None:
-        """Fold one finished session into the lifetime totals."""
+    def merge(self, session: Score, matches: Score, picks: Iterable[Move],
+              rounds: Sequence[Round] = ()) -> None:
+        """Fold one finished session into the lifetime totals.
+
+        ``rounds`` (optional) are the session's rounds in order; they feed the
+        lifetime record of how the player reacts to wins, losses and draws."""
         if session.rounds == 0:
             return
+        if rounds:
+            merge_reactions(self.habits, count_reactions(rounds))
         self.wins += session.wins
         self.losses += session.losses
         self.draws += session.draws
@@ -92,6 +102,13 @@ class Stats:
             {k: _count(v) for k, v in raw_moves.items() if k in known}
             if isinstance(raw_moves, dict) else {}
         )
+        raw_habits = data.get("habits")
+        habits = {}
+        if isinstance(raw_habits, dict):
+            for outcome in (o.value for o in Outcome):
+                steps = raw_habits.get(outcome)
+                if isinstance(steps, dict):
+                    habits[outcome] = {s: _count(steps.get(s)) for s in ("stay", "up", "down")}
         return cls(
             wins=_count(data.get("wins")),
             losses=_count(data.get("losses")),
@@ -101,6 +118,7 @@ class Stats:
             best_streak=_count(data.get("best_streak")),
             sessions=_count(data.get("sessions")),
             moves=moves,
+            habits=habits,
         )
 
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rps-game-cli"
 dynamic = ["version"]
-description = "A fun Rock Paper Scissors game for the terminal"
+description = "Rock Paper Scissors for the terminal: a roguelike Gauntlet, a mind-reading AI and online duels"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

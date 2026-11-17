@@ -137,7 +137,7 @@ def test_dual_player_opens_the_create_join_menu(monkeypatch):
 
 def test_multiplayer_is_not_selectable_yet(monkeypatch):
     ui, out = _rich_ui()
-    _keys(monkeypatch, [K.KEY_ENTER, K.KEY_DOWN, K.KEY_DOWN, K.KEY_ENTER,   # Multiplayer
+    _keys(monkeypatch, [K.KEY_ENTER, *[K.KEY_DOWN] * 3, K.KEY_ENTER,        # Multiplayer
                         K.KEY_ESC, K.KEY_ESC])
     assert menu.select_game(ui) is None
     assert "Multiplayer is coming soon." in out.getvalue()
@@ -164,7 +164,7 @@ def test_plain_menu_flow_then_game_then_back_to_menu_then_exit(monkeypatch, caps
 
 def test_plain_menu_rejects_bad_input_and_coming_soon(monkeypatch, capsys):
     _feed(monkeypatch, ["9", "x", "1",     # junk, junk, then Start Game
-                        "3",               # Multiplayer (notice)
+                        "4",               # Multiplayer (notice)
                         "q",               # back to the main menu
                         "q"])              # main menu: q exits
     assert cli.main(["--plain"]) == 0
@@ -207,22 +207,22 @@ def test_stats_menu_toggle_persists_and_keeps_the_cursor(monkeypatch):
 
     assert settings.load().show_stats_after_game is False        # off by default
     ui, out = _rich_ui()
-    _keys(monkeypatch, [K.KEY_DOWN, K.KEY_DOWN, K.KEY_ENTER,     # toggle (3rd entry)
+    _keys(monkeypatch, [*[K.KEY_DOWN] * 4, K.KEY_ENTER,          # toggle (5th entry)
                         K.KEY_ENTER,                             # cursor stayed on it: toggle back on...
                         K.KEY_ESC])
     menu.stats_menu(ui)
     assert settings.load().show_stats_after_game is False        # toggled twice
-    _keys(monkeypatch, [K.KEY_DOWN, K.KEY_DOWN, K.KEY_ENTER, K.KEY_ESC])
+    _keys(monkeypatch, [*[K.KEY_DOWN] * 4, K.KEY_ENTER, K.KEY_ESC])
     menu.stats_menu(ui)
     assert settings.load().show_stats_after_game is True
     assert "Show stats after each game: On" in out.getvalue()
 
 
-def test_stats_menu_head_to_head_is_coming_soon(monkeypatch):
+def test_stats_menu_head_to_head_starts_empty(monkeypatch):
     ui, out = _rich_ui()
-    _keys(monkeypatch, [K.KEY_DOWN, K.KEY_ENTER, K.KEY_ESC])
+    _keys(monkeypatch, [*[K.KEY_DOWN] * 3, K.KEY_ENTER, "x", K.KEY_ESC])   # open, any key, back
     menu.stats_menu(ui)
-    assert "Head-to-head is coming soon." in out.getvalue()
+    assert "No online games recorded yet." in out.getvalue()
 
 
 def test_stats_menu_view_shows_lifetime_screen(monkeypatch):
@@ -237,10 +237,10 @@ def test_stats_menu_view_shows_lifetime_screen(monkeypatch):
 def test_stats_menu_reset_needs_confirmation(monkeypatch):
     stats.save(stats.Stats(wins=3))
     ui, _ = _rich_ui()
-    _keys(monkeypatch, [K.KEY_DOWN, K.KEY_DOWN, K.KEY_DOWN, K.KEY_ENTER, "n", K.KEY_ESC])
+    _keys(monkeypatch, [*[K.KEY_DOWN] * 5, K.KEY_ENTER, "n", K.KEY_ESC])
     menu.stats_menu(ui)
     assert stats.load().wins == 3                                # declined
-    _keys(monkeypatch, [K.KEY_DOWN, K.KEY_DOWN, K.KEY_DOWN, K.KEY_ENTER, "y", K.KEY_ESC])
+    _keys(monkeypatch, [*[K.KEY_DOWN] * 5, K.KEY_ENTER, "y", K.KEY_ESC])
     menu.stats_menu(ui)
     assert stats.load().wins == 0
 
@@ -257,7 +257,7 @@ def test_main_menu_stats_entry_opens_the_stats_menu(monkeypatch):
 def test_plain_stats_menu_flow(monkeypatch, capsys):
     from rps_game import settings
 
-    _feed(monkeypatch, ["2", "3", "q", "3"])    # Stats > toggle > back > Exit
+    _feed(monkeypatch, ["2", "5", "q", "3"])    # Stats > toggle > back > Exit
     assert cli.main(["--plain"]) == 0
     assert settings.load().show_stats_after_game is True
     assert "Show stats after each game: Off" in capsys.readouterr().out

@@ -111,6 +111,44 @@ def test_ui_goes_back_to_single_player_seats_afterwards(monkeypatch):
     assert (ui.you.name, ui.opponent.name) == ("You", "Computer")
 
 
+# ================================================================ head-to-head
+
+def test_a_finished_game_goes_into_the_head_to_head_record(monkeypatch, capsys):
+    from rps_game import profile
+
+    drive(monkeypatch, ["r", "r", "2"], bot_playing(S, S))
+    rival = profile.load().rivals["b" * 32]                               # the joiner's install ID
+    assert (rival.name, rival.games_won, rival.games_lost) == ("Bob", 1, 0)
+    assert (rival.rounds_won, rival.rounds_lost, rival.rounds_drawn) == (2, 0, 0)
+    out = capsys.readouterr().out
+    assert "Achievement unlocked: Friendly Fire" in out and "XP. Rank:" in out
+
+
+def test_a_rematch_counts_as_a_second_game(monkeypatch):
+    from rps_game import profile
+
+    drive(monkeypatch, ["r", "r", "1", "p", "p", "2"], bot_playing(S, S, rematch=1))
+    rival = profile.load().rivals["b" * 32]
+    assert (rival.games_won, rival.games_lost) == (1, 1) and rival.rounds_won == 2
+
+
+def test_forfeits_count_for_whoever_stayed(monkeypatch, capsys):
+    from rps_game import profile
+
+    drive(monkeypatch, ["r", "r"], bot_playing(S, then="leave"))
+    assert profile.load().rivals["b" * 32].games_won == 1
+    profile.reset()
+    drive(monkeypatch, ["q", "y"], bot_playing(S))
+    assert profile.load().rivals["b" * 32].games_lost == 1
+
+
+def test_no_save_keeps_online_games_off_the_record(monkeypatch):
+    from rps_game import profile
+
+    drive(monkeypatch, ["r", "r", "2"], bot_playing(S, S), save=False)
+    assert profile.load().rivals == {}
+
+
 # ================================================================ leaving and forfeits
 
 def test_the_opponent_leaving_mid_game_is_a_win_by_forfeit(monkeypatch, capsys):

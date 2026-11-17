@@ -8,9 +8,11 @@ other player wins.
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
+from .. import profile as profile_store
 from ..dualsetup import DualSetup
+from ..engine import Outcome
 from ..menu import GameConfig
 from ..players import Seat, Side
 from ..ui import GameUI, Option
@@ -26,13 +28,35 @@ AFTER_GAME = [
 ]
 
 
+def _game_outcome(result) -> Optional[Outcome]:
+    """Who took the game: a forfeit counts as a win for whoever stayed."""
+    if result.finished is not None and result.finished.winner is not None:
+        return result.finished.winner
+    if result.opponent_left:
+        return Outcome.WIN
+    if result.quit_by_player or result.interrupted:
+        return Outcome.LOSS
+    return None
+
+
+def _record(opponent: NetworkOpponent, result) -> list[str]:
+    """Save the game to the head-to-head record. Returns lines for the results screen."""
+    profile = profile_store.load()
+    gains = profile_store.record_online(
+        profile, opponent_id=opponent.opponent_id, opponent_name=opponent.name,
+        session=result.session, outcome=_game_outcome(result))
+    profile_store.save(profile)
+    return gains.lines()
+
+
 def play_dual(ui: GameUI, setup: DualSetup, connection: Connection, *,
-              run_game: Callable, **options) -> bool:
+              run_game: Callable, save: bool = True, **options) -> bool:
     """Play games against ``connection``'s other end until someone leaves.
 
     Returns True if the player pressed Ctrl-C (or input closed), meaning "quit the
-    whole program"; False for an ordinary return to the menu. ``options`` (timeouts)
-    go to the NetworkOpponent; tests use them to stay fast."""
+    whole program"; False for an ordinary return to the menu. Each game is added to
+    the head-to-head record unless ``save`` is off. ``options`` (timeouts) go to the
+    NetworkOpponent; tests use them to stay fast."""
     opponent = NetworkOpponent(connection, **options)
     ui.set_players(Seat(setup.name, setup.side), Seat(connection.opponent_name, setup.side.other))
     terms = connection.terms
@@ -40,16 +64,17 @@ def play_dual(ui: GameUI, setup: DualSetup, connection: Connection, *,
     try:
         while True:
             result = run_game(ui, config, save=False, opponent=opponent)
+            earned = _record(opponent, result) if save else []
             if result.interrupted:
                 return True
             if result.quit_by_player:
                 return False                              # the finally block says goodbye
             if result.opponent_left:
                 ui.message("Game over", [result.end_reason or f"{opponent.name} left the game.",
-                                         "You win by forfeit."], crumbs=CRUMBS)
+                                         "You win by forfeit.", *earned], crumbs=CRUMBS)
                 return False
             choice = ui.results_menu("Game over", result.session, result.finished, AFTER_GAME,
-                                     idle=opponent.results_status)
+                                     idle=opponent.results_status, extra=earned)
             if choice != "again":
                 return False
             if not _rematch(ui, opponent):

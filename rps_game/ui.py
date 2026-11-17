@@ -29,6 +29,7 @@ from rich.text import Text
 
 from . import art, terminal
 from .engine import Match, Move, Outcome, Round, Score
+from .insight import reaction_tells
 from .players import Seat, Side
 from .stats import Stats
 
@@ -389,7 +390,7 @@ class GameUI:
         parts.append(Align.center(Group(*rows)))
         parts += [
             _line(),
-            _line(options[index].description, "dim"),
+            Text(options[index].description, style="dim", justify="center"),   # may wrap
             _line(notice, "yellow"),
             _line(),
             _line(hint, "dim"),
@@ -585,6 +586,33 @@ class GameUI:
         self.console.print(self._vcenter(parts))
         terminal.flush_input()
         terminal.read_key()
+
+    def page(self, title: str, lines: Sequence[RenderableType | str], *,
+             footer: str = "Press any key to go back", wait: bool = True) -> None:
+        """A centred page of text with no logo, so a long list still fits.
+
+        Rich mode waits for a key (unless ``wait`` is off); plain mode prints the
+        lines and carries on. Strings are centred; renderables are used as given."""
+        if not self._interactive():
+            self._say()
+            self._say(title, "bold")
+            for item in lines:
+                if isinstance(item, (str, Text)):
+                    text = (item.plain if isinstance(item, Text) else item).strip()
+                    if text:
+                        self._say(text)
+                else:
+                    self.console.print(item)
+            return
+        parts: list[RenderableType] = [_line(title, "bold cyan"), _line()]
+        parts += [_line(item) if isinstance(item, str) else item for item in lines]
+        if wait:
+            parts += [_line(), _line(footer, "dim")]
+        self._clear()
+        self.console.print(self._vcenter(parts))
+        if wait:
+            terminal.flush_input()
+            terminal.read_key()
 
     def confirm(self, question: str, *, crumbs: str = "") -> bool:
         """Yes/no question; anything but an explicit yes means no."""
@@ -967,8 +995,9 @@ class GameUI:
         return (f"{label}: Wins {s.wins}, Losses {s.losses}, Draws {s.draws}, "
                 f"Rounds {s.rounds}, Win rate {s.win_rate:.0%}, Best streak {s.best_streak}")
 
-    def _results_header(self, session, matches, lifetime, finished):
-        """(rich parts, plain lines) describing a finished game; no title."""
+    def _results_header(self, session, matches, lifetime, finished, extra=()):
+        """(rich parts, plain lines) describing a finished game; no title.
+        ``extra`` lines (what the game earned, what it gave away) go last."""
         match_line = None
         if matches is not None and matches.rounds:
             match_line = f"Matches won: {matches.wins}   Matches lost: {matches.losses}"
@@ -993,14 +1022,18 @@ class GameUI:
                 plain.append(self._stats_line("All time", lifetime))
         else:
             rich.append(_line("No rounds played this time.", "dim"))
+        if extra:
+            rich.append(_line())
+            rich += [Text(text, justify="center") for text in extra]
+            plain += list(extra)
         return rich, plain
 
     def results_menu(self, title: str, session: Score, finished: Optional[Match],
                      options: Sequence[Option], *, idle: Optional[Callable[[], str]] = None,
-                     back_label: str = "leave") -> Optional[str]:
+                     back_label: str = "leave", extra: Sequence[str] = ()) -> Optional[str]:
         """Game over: the result and scoreboard with a menu underneath."""
         self.end_round()
-        rich, plain = self._results_header(session, None, None, finished)
+        rich, plain = self._results_header(session, None, None, finished, extra)
         return self.choose(title, options, back_label=back_label, header=rich,
                            plain_header=plain, idle=idle)
 
@@ -1013,11 +1046,13 @@ class GameUI:
         title: str = "Thanks for playing!",
         finished: Optional[Match] = None,
         pause: bool = False,
+        extra: Sequence[str] = (),
     ) -> None:
         """Results screen: a centred scoreboard. With ``pause`` it waits for a
-        key (used when returning to the menu); otherwise it stays on screen."""
+        key (used when returning to the menu); otherwise it stays on screen.
+        ``extra`` lines follow the scoreboard: the mind reader's verdict, XP, unlocks."""
         self.end_round()
-        rich, plain = self._results_header(session, matches, lifetime, finished)
+        rich, plain = self._results_header(session, matches, lifetime, finished, extra)
         if self.plain:
             self._say()
             self._say(title, "bold")
@@ -1048,6 +1083,8 @@ class GameUI:
                   f"Matches won: {stats.matches_won}   lost: {stats.matches_lost}"]
         if fav:
             extras.append(f"Favourite move: {fav[0]} ({fav[1]:.0%} of your throws)")
+        tells = sorted(reaction_tells(stats.habits, min_samples=12, min_share=0.5), reverse=True)
+        extras += [f"Your tell: {text}" for _, text in tells[:2]]
         if self.plain:
             self._say("Lifetime statistics", "bold")
             self._say(self._stats_line("All time", stats))

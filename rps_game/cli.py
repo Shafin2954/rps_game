@@ -10,14 +10,18 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from . import __version__, stats as stats_store, terminal
-from .engine import Match, Move, Score
+from . import insight as insight_reader
+from . import profile as profile_store
+from .engine import Match, Move, Round, Score
 from . import settings as settings_store
 from .dualsetup import DualSetup
+from .gauntlet.play import MAX_SEED_CELLS, GauntletConfig, play_gauntlet, seed_error
 from .net.config import mailbox_url
 from .net.connect import connect_dual
 from .net.errors import Cancelled, NetError
 from .net.play import LEAVE_PROMPT, play_dual
-from .menu import MAX_ROUNDS, GameConfig, select_game
+from .menu import (MAX_ROUNDS, GameConfig, reset_everything, select_game, show_achievements,
+                   show_profile)
 from .players import CpuOpponent, Opponent
 from .stats import Stats
 from .strategies import DIFFICULTIES, create_strategy
@@ -56,6 +60,15 @@ def _first_to(value: str) -> int:
     return number
 
 
+def _seed(value: str) -> str:
+    error = seed_error(value)
+    if error is None and len(value.strip()) > MAX_SEED_CELLS:
+        error = f"a seed is at most {MAX_SEED_CELLS} characters"
+    if error:
+        raise argparse.ArgumentTypeError(error)
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rps",
@@ -80,6 +93,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip the menu: computer opponent (default: normal)",
     )
     parser.add_argument(
+        "-g", "--gauntlet", action="store_true",
+        help="skip the menu: climb the Gauntlet, ten foes with tells, relics and a boss",
+    )
+    parser.add_argument(
+        "--daily", action="store_true",
+        help="skip the menu: today's Daily Run, the same Gauntlet for everyone",
+    )
+    parser.add_argument(
+        "--seed", type=_seed, metavar="SEED",
+        help="skip the menu: the Gauntlet built from SEED (share one to race a friend)",
+    )
+    parser.add_argument(
         "--plain", action="store_true",
         help="screen-reader friendly: no art, colour or animation; line input",
     )
@@ -96,7 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--stats", action="store_true", help="show lifetime statistics and exit")
     parser.add_argument(
-        "--reset-stats", action="store_true", help="delete saved statistics and exit"
+        "--profile", action="store_true", help="show your rank and achievements and exit"
+    )
+    parser.add_argument(
+        "--reset-stats", action="store_true",
+        help="delete saved statistics, rank and achievements and exit",
     )
     parser.add_argument(
         "--no-save", action="store_true", help="don't record this session in your statistics"
@@ -158,18 +187,25 @@ def show_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def show_profile_and_exit(args: argparse.Namespace) -> int:
+    ui, profile = _make_ui(args), profile_store.load()
+    show_profile(ui, profile, wait=False)
+    show_achievements(ui, profile, wait=False)
+    return 0
+
+
 def reset_stats() -> int:
     try:
-        answer = input("Delete all saved statistics? [y/N] ")
+        answer = input("Delete all saved statistics, your rank and your achievements? [y/N] ")
     except EOFError:
         answer = ""
     if answer.strip().lower() not in ("y", "yes"):
         print("Nothing deleted.")
         return 0
-    if stats_store.reset():
+    if reset_everything():
         print("Statistics deleted.")
         return 0
-    print("Could not delete the statistics file.")
+    print("Could not delete the saved files.")
     return 1
 
 
@@ -183,6 +219,8 @@ class GameResult:
     opponent_left: bool = False   # the opponent quit, disconnected or cheated mid-game
     quit_by_player: bool = False  # the local player chose to leave
     end_reason: str = ""          # why an online game ended early, in words
+    rounds: tuple[Round, ...] = ()   # every round of the session, in order
+    extra: tuple[str, ...] = ()   # lines for the results screen: mind reader, XP, unlocks
 
 
 def _new_match(config: GameConfig) -> Match:
@@ -200,6 +238,7 @@ def run_game(ui: GameUI, config: GameConfig, *, save: bool = True,
         opponent = CpuOpponent(create_strategy(config.difficulty))
     session, matches = Score(), Score()
     history: list[Move] = []          # everything the player has thrown
+    played: list[Round] = []          # every finished round
     match = _new_match(config)
     finished: Optional[Match] = None
     interrupted = opponent_left = quit_by_player = False
@@ -233,6 +272,7 @@ def run_game(ui: GameUI, config: GameConfig, *, save: bool = True,
                 history.append(move)
 
                 rnd = match.play(move, theirs)
+                played.append(rnd)
                 opponent.record(rnd)
                 session.record(rnd.outcome)
                 ui.show_round(rnd, match, session)
@@ -255,13 +295,23 @@ def run_game(ui: GameUI, config: GameConfig, *, save: bool = True,
         interrupted = True
 
     lifetime = None
+    extra: list[str] = []
+    reading = None if online else insight_reader.analyse(played)
+    if reading is not None:                            # what the player's throws gave away
+        extra += reading.lines()
     if save:
         lifetime = stats_store.load()
-        lifetime.merge(session, matches, history)
+        lifetime.merge(session, matches, history, played)
         if session.rounds:
             stats_store.save(lifetime)
+            if not online:
+                profile = profile_store.load()
+                extra += profile_store.record_classic(
+                    profile, difficulty=config.difficulty, session=session,
+                    insight=reading).lines()
+                profile_store.save(profile)
     return GameResult(session, matches, lifetime, finished, interrupted, opponent_left,
-                      quit_by_player, end_reason)
+                      quit_by_player, end_reason, tuple(played), tuple(extra))
 
 
 def _shown_lifetime(result: GameResult):
@@ -279,7 +329,16 @@ def play_direct(args: argparse.Namespace) -> int:
     with _keys(ui):
         result = run_game(ui, config, save=not args.no_save)
     ui.goodbye(result.session, result.matches if config.best_of or config.first_to else None,
-               _shown_lifetime(result), finished=result.finished)
+               _shown_lifetime(result), finished=result.finished, extra=result.extra)
+    return 0
+
+
+def play_gauntlet_direct(args: argparse.Namespace) -> int:
+    """`rps --gauntlet`, `--daily` or `--seed X`: straight into a run, then exit."""
+    ui = _make_ui(args)
+    config = GauntletConfig(seed=args.seed, daily=args.daily)
+    with _keys(ui):
+        play_gauntlet(ui, config, save=not args.no_save)
     return 0
 
 
@@ -295,16 +354,21 @@ def run_menu(args: argparse.Namespace) -> int:
                 if isinstance(config, DualSetup):
                     connection = connect_dual(ui, config, mailbox=mailbox_url(args.mailbox))
                     if connection is not None and play_dual(
-                            ui, config, connection, run_game=run_game):
+                            ui, config, connection, run_game=run_game, save=not args.no_save):
                         ui.farewell()                      # Ctrl-C mid-game: quit, like single player
+                        return 0
+                    continue
+                if isinstance(config, GauntletConfig):
+                    if play_gauntlet(ui, config, save=not args.no_save, pause=True).interrupted:
                         return 0
                     continue
                 result = run_game(ui, config, save=not args.no_save)
                 if result.interrupted:
-                    ui.goodbye(result.session, None, _shown_lifetime(result), finished=result.finished)
+                    ui.goodbye(result.session, None, _shown_lifetime(result),
+                               finished=result.finished, extra=result.extra)
                     return 0
                 ui.goodbye(result.session, None, _shown_lifetime(result), finished=result.finished,
-                           title="Game over", pause=True)
+                           title="Game over", pause=True, extra=result.extra)
     except (KeyboardInterrupt, EOFError):
         print()
         return 0
@@ -318,8 +382,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return update()
     if args.stats:
         return show_stats(args)
+    if args.profile:
+        return show_profile_and_exit(args)
     if args.reset_stats:
         return reset_stats()
+    if args.gauntlet or args.daily or args.seed:
+        return play_gauntlet_direct(args)
     if args.difficulty or args.best_of or args.rounds or args.first_to:
         return play_direct(args)
     return run_menu(args)

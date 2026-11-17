@@ -10,8 +10,9 @@ from collections import Counter
 from typing import Protocol, Sequence
 
 from .engine import MOVES, Move
+from .oracle import OracleStrategy
 
-DIFFICULTIES = ("easy", "normal", "hard")
+DIFFICULTIES = ("easy", "normal", "hard", "oracle")
 
 
 class Strategy(Protocol):
@@ -106,10 +107,14 @@ class PatternStrategy:
 
 
 def create_strategy(difficulty: str, rng: random.Random | None = None) -> Strategy:
+    """easy: pure chance. normal: counters your favourite. hard: reads sequences.
+    oracle: a council of predictors (see oracle.py) with no mercy built in."""
     if difficulty == "easy":
         return RandomStrategy(rng)
     if difficulty == "normal":
         return AdaptiveStrategy(randomness=0.4, window=12, rng=rng)
     if difficulty == "hard":
         return PatternStrategy(randomness=0.15, rng=rng)
+    if difficulty == "oracle":
+        return OracleStrategy(rng=rng)
     raise ValueError(f"unknown difficulty: {difficulty!r}")

@@ -1,7 +1,18 @@
 # rps-game-cli
 
-Rock Paper Scissors for your terminal, with ASCII hands, a countdown animation,
-best-of-N matches, an adaptive computer opponent and a screen-reader friendly mode.
+Rock Paper Scissors for your terminal, turned into a game of reading minds.
+
+- **The Gauntlet** - a ten-floor climb. Every foe has hit points, a personality and a *tell*;
+  you have Focus to spend on techniques and a relic to choose after every fight. The Oracle
+  waits at the top, and it has been watching you the whole way up.
+- **The Oracle** - a computer opponent that runs a council of predictors against you and
+  cannot be out-guessed, only out-randomised.
+- **The mind reader** - after a game, see how predictable you were and which habits gave
+  you away.
+- **Dual Player** - play a friend online with passkey-protected, cheat-proof rounds, and keep
+  a head-to-head record.
+- Rank, experience and achievements across every mode; ASCII hands and a countdown; and a
+  screen-reader friendly plain mode for all of it.
 
 ## Install
 
@@ -23,8 +34,9 @@ Main menu
   Stats
   Exit
         Start Game > Select a mode
-        > Single Player        -> difficulty (Easy / Normal / Hard)
-          Dual Player (online, in progress)   -> Create game / Join game
+        > Single Player        -> difficulty (Easy / Normal / Hard / Oracle)
+          Dual Player (online) -> Create game / Join game
+          Gauntlet             -> New run / Daily Run / Enter a seed
           Multiplayer (coming soon)
 ```
 
@@ -34,15 +46,19 @@ are numbered lists you answer by typing.
 Skip the menu with flags:
 
 ```bash
-rps -d hard            # straight into an unlimited game (easy | normal | hard)
+rps --gauntlet         # climb the Gauntlet (a new random tower)
+rps --daily            # today's Daily Run: the same tower for everyone
+rps --seed CAT42       # the tower built from a seed (share it to race a friend)
+rps -d hard            # straight into an unlimited game (easy | normal | hard | oracle)
 rps -d easy -r 10      # exactly 10 rounds, highest score wins (ties are possible)
 rps -f 3               # first to 3 wins takes the game (draws don't count)
 rps -b 5               # same as -f 3, phrased as best of 5
 rps --plain            # no art, colour or animation; type words and press Enter
 rps --no-animation     # keep the art, skip the countdown
 rps --stats            # lifetime statistics (saved between sessions)
+rps --profile          # your rank, Gauntlet records and achievements
 rps --no-save          # play without recording the session
-rps --reset-stats      # delete saved statistics
+rps --reset-stats      # delete saved statistics, rank and achievements
 rps --update           # upgrade from GitHub
 python -m rps_game     # same as `rps`
 ```
@@ -50,7 +66,58 @@ python -m rps_game     # same as `rps`
 The screen is redrawn every round: fists, a countdown, the reveal, then the
 scoreboard updates and the hands are wiped for the next round. Stats are stored in
 `~/.local/share/rps-game-cli/stats.json` (platform equivalent elsewhere; override
-with `RPS_STATS_FILE`).
+with `RPS_STATS_FILE`); your rank, achievements and records sit next to it in
+`profile.json` (`RPS_PROFILE_FILE`).
+
+### The Gauntlet
+
+Ten floors, ten foes, one life. Classic rules decide who wins each round; the Gauntlet
+decides what a win is worth.
+
+- **Hit points.** You start with 14. Win a round and the foe takes damage (2, before
+  relics); lose one and you take theirs. A fight ends when someone reaches 0. You heal
+  3 HP after each fight you win, and that is all the healing there is unless you rest.
+- **Tells.** Every foe is introduced with a line that hints at how it thinks ("Never throws
+  the same thing twice in a row", "Certain you are about to repeat yourself"). Early foes
+  can be solved outright. Later ones add noise, armour, thorns and real pattern reading.
+  The strip of recent throws under the hands is there for you to study.
+- **Focus and techniques.** Losing or drawing a round earns 1 Focus (you hold up to 4).
+  Spend it before you throw, one technique per round:
+
+  | Key | Technique | Focus | Effect |
+  |-----|-----------|-------|--------|
+  | `f` | Foresight | 2 | Rules out one throw the foe will not make this round |
+  | `g` | Guard     | 1 | You take no damage this round |
+  | `c` | Charge    | 2 | If you win this round, you deal double damage |
+
+- **Relics.** After each fight choose one of three relics, or rest for 5 HP instead.
+  There are 22: *Granite Knuckles* (rock wins +2), *Momentum* (each win in a row hits
+  harder), *Second Wind* (survive a killing blow once per fight), *Third Eye* (cheaper
+  Foresight), *Static Charge* (draws hurt the foe)... A relic that rewards one throw also
+  tempts you into throwing it, and the foes on the upper floors notice.
+- **The ladder.** Two rookies, two scrappers, **the Warden** on floor 5 (it has watched
+  every throw of your climb and counters your favourite), two veterans, two masters, and
+  **the Oracle** on floor 10. Sixteen regular foes are shuffled into each run.
+- **Seeds.** The same seed always builds the same tower with the same relics on offer, so
+  a seed is a challenge you can hand to a friend. The **Daily Run** uses today's date.
+- **Score.** Each floor cleared is worth 100 points times its number, a fight won without
+  taking damage adds 100, and conquering the tower pays a bonus that grows with the health
+  you have left.
+
+In a fight: `r` / `p` / `s` throw, `f` / `g` / `c` arm a technique (press again to cancel
+Guard or Charge), `i` shows the foe's traits and your relics, `q` abandons the run. Plain
+mode takes the same letters, or the words, one per line.
+
+### The mind reader, rank and achievements
+
+Any single-player game of eight rounds or more ends with a reading: how often a pattern
+reader would have beaten you (33% is pure chance), a verdict from *Unreadable* to *An open
+book*, and your strongest habits in words ("After a loss you switch to the one throw
+neither of you used"). Lifetime habits appear on the statistics screen.
+
+Every mode earns experience toward a rank (Novice to Legend) and there are 17 achievements
+to unlock. `Stats` in the main menu shows your profile, achievements and head-to-head
+record; `rps --profile` prints the first two.
 
 ### Dual Player
 
@@ -73,7 +140,9 @@ way to share a room code and passkey (a chat message is fine).
 - **Leaving is a forfeit.** Quitting (you are asked to confirm), closing the program, losing your
   connection for 30 seconds or taking more than two minutes to choose counts as a win for the other
   player.
-- Statistics for online games (head-to-head) are coming soon; they are not recorded yet.
+- **Head-to-head.** Every online game is added to your record against that player (it
+  follows their installation, not their name, so a renamed friend keeps their history and
+  two different Alices stay separate). See it under `Stats > Head-to-head`.
 
 **How it stays private and safe**
 
@@ -102,10 +171,11 @@ rps --mailbox ws://YOUR-HOST:4000/v1            # both players, or set $RPS_MAIL
 
 ### Stats menu
 
-`Stats` in the main menu shows your lifetime results and holds two preferences:
-**Show stats after each game** (off by default: the results screen then shows only the game
-you just played) and **Reset statistics**. Head-to-head results against other players will
-arrive with Dual Player.
+`Stats` in the main menu shows your lifetime results, your **Profile** (rank and Gauntlet
+records), your **Achievements** and your **Head-to-head** record against other players. It
+also holds two preferences: **Show stats after each game** (off by default: the results
+screen then shows only the game you just played) and **Reset statistics**, which wipes your
+results, rank and achievements.
 
 Game keys: `r` / `p` / `s` (or `1` / `2` / `3`), `q` to quit. In `--plain` mode you can
 also type the full word. Set `NO_COLOR=1` to disable colour.
@@ -116,6 +186,13 @@ also type the full word. Set `NO_COLOR=1` to disable colour.
 - **normal**: counters your most frequent recent move most of the time.
 - **hard**: reads sequences in your play (e.g. "after paper you usually throw
   scissors", or R-P-S cycles) and counters the prediction, with a little randomness.
+- **oracle**: eleven small models of you (your favourite throw, what you do after your own
+  last throws, how you answer the computer's, how you react to winning and losing, the
+  longest stretch of earlier play that looks like right now), each second-guessed three
+  levels deep. It follows whichever has been right lately and plays pure chance when none
+  has. A truly random player holds it to a draw; a cycle, one repeated throw or a
+  win-stay-lose-shift habit loses nine rounds in ten, and even a mild bias toward one
+  throw gives it a steady edge.
 
 ## Development
 
@@ -128,5 +205,10 @@ pytest
 `pip install -e ".[dev]"` also installs a local mailbox server, which the network
 integration tests start on a random local port (they never touch the public one).
 
-Layout: `net/` (protocol, session handshake, transport, connection screens) · `engine.py` (pure rules) · `strategies.py` (computer players) ·
+Layout: `gauntlet/` (`rules.py` the duel, `foes.py`, `relics.py`, `run.py` one climb, `screens.py`, `play.py`) ·
+`oracle.py` (the Oracle) · `insight.py` (the mind reader) · `profile.py` (rank, achievements, head-to-head) ·
+`net/` (protocol, session handshake, transport, connection screens) · `engine.py` (pure rules) · `strategies.py` (computer players) ·
 `ui.py` (menus, screens, input) · `menu.py` (menu flow) · `stats.py` (saved stats) · `art.py` · `terminal.py` (keyboard) · `cli.py` (entry point).
+
+The Gauntlet's rules are pure and seeded: `tests/test_gauntlet_run.py` plays whole runs
+without a screen, and includes a balance guard (blind luck must rarely reach the top).
