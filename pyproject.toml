@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Sohanur Rahman Sohan" }]
-dependencies = ["pyfiglet>=1.0", "rich>=13", "magic-wormhole>=0.24,<1"]
+dependencies = ["pyfiglet>=1.0", "rich>=13"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -20,7 +20,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff", "hypothesis", "magic-wormhole-mailbox-server"]
+# Dual Player needs Magic Wormhole, which needs PyNaCl (hard to build on some phones).
+online = ["magic-wormhole>=0.24,<1"]
+dev = ["pytest>=7", "ruff", "hypothesis", "magic-wormhole>=0.24,<1",
+       "magic-wormhole-mailbox-server"]
 
 [project.scripts]
 rps = "rps_game.cli:main"

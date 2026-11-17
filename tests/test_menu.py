@@ -269,3 +269,19 @@ def test_confirm_plain(monkeypatch):
     assert ui.confirm("Sure?") is True
     _feed(monkeypatch, [""])
     assert ui.confirm("Sure?") is False
+
+
+def test_dual_player_without_the_online_add_on_explains_how_to_get_it(monkeypatch):
+    monkeypatch.setattr(menu, "online_available", lambda: False)
+    ui, out = _rich_ui()
+    _keys(monkeypatch, [K.KEY_ENTER, K.KEY_DOWN, K.KEY_ENTER,        # Start Game > Dual Player
+                        "x",                                         # dismiss the message
+                        K.KEY_ESC, K.KEY_DOWN, K.KEY_DOWN, K.KEY_ENTER])
+    assert menu.select_game(ui) is None
+    text = out.getvalue()
+    assert "pip install magic-wormhole" in text and "Create game" not in text
+
+
+def test_the_online_add_on_is_detected():
+    from rps_game.net.transport import online_available
+    assert online_available() is True                    # installed in the dev environment

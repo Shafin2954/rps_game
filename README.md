@@ -26,6 +26,19 @@ pipx install git+https://github.com/SohanurRahmanSohan43/rps_game.git
 pip install -e ".[dev]"
 ```
 
+Dual Player (online) is an optional add-on, because it needs PyNaCl, which can be hard to
+build on some systems (Termux on Android, for one). Add it with
+`pip install "rps-game-cli[online]"` or simply `pip install magic-wormhole`. Without it,
+everything else works and Dual Player tells you how to install it.
+
+**Termux (Android):**
+
+```bash
+pkg install -y python git
+pip install "git+https://github.com/Shafin2954/rps_game.git"
+rps
+```
+
 ## Play
 
 Run `rps` to open the menu:

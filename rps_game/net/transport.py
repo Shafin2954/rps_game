@@ -164,6 +164,23 @@ class WormholeTransport:
             pass
 
 
+ONLINE_MISSING = [
+    "Dual Player needs the online add-on, which is not installed.",
+    "Install it with:  pip install magic-wormhole",
+    "Everything else (Single Player, the Gauntlet, stats) works without it.",
+]
+
+
+def online_available() -> bool:
+    """Is the optional online add-on (Magic Wormhole) installed?"""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("wormhole") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def create_transport(relay_url: str) -> WormholeTransport:
     return WormholeTransport(relay_url)
 

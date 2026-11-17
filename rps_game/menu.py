@@ -23,6 +23,7 @@ from . import settings as settings_store
 from . import stats as stats_store
 from .dualsetup import DualSetup, setup_dual
 from .gauntlet.foes import FLOORS
+from .net.transport import ONLINE_MISSING, online_available
 from .gauntlet.play import MAX_SEED_CELLS, GauntletConfig, seed_error
 from .profile import ACHIEVEMENTS, BESTIARY_SIZE, Profile
 from .ui import GameUI, Option
@@ -223,6 +224,9 @@ def select_game(ui: GameUI) -> Optional[GameConfig | DualSetup | GauntletConfig]
             elif pick == "single":
                 state = "difficulty"
             elif pick == "dual":
+                if not online_available():
+                    ui.message("Dual Player", ONLINE_MISSING, crumbs="Start Game")
+                    continue
                 setup = setup_dual(ui)
                 if setup is not None:
                     return setup
